@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+
+# Models and scalers (keep private)
+models/
+*.pt
+*.pkl
+
+# Env files
+.env
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log
