@@ -21,3 +21,14 @@ models/
 
 # Logs
 *.log
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# System files
+.DS_Store
+Thumbs.db
