@@ -1,9 +1,0 @@
-pandas
-numpy
-requests
-python-binance
-discord.py
-torch
-scikit-learn
-joblib
-ta
