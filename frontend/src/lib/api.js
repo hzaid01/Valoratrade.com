@@ -87,7 +87,8 @@ export async function getTopCoins(limit = 100) {
     throw new Error('Limit must be between 1 and 500');
   }
 
-  const result = await apiFetch(`${API_URL}/api/market/top-coins?limit=${limit}`);
+  const headers = await getAuthHeaders();
+  const result = await apiFetch(`${API_URL}/api/market/top-coins?limit=${limit}`, { headers });
   return result;
 }
 
@@ -102,6 +103,23 @@ export async function analyzeSymbol(symbol) {
 
   const headers = await getAuthHeaders();
   const result = await apiFetch(`${API_URL}/api/market/analyze/${encodeURIComponent(symbol)}`, {
+    headers
+  });
+  return result;
+}
+
+/**
+ * Get historical K-lines (candlesticks) for a symbol.
+ * @param {string} symbol - Trading pair symbol (e.g., "BTCUSDT")
+ * @param {string} interval - Kline interval (default: "1h")
+ */
+export async function getKlines(symbol, interval = '1h') {
+  if (!symbol || typeof symbol !== 'string') {
+    throw new Error('Invalid symbol');
+  }
+
+  const headers = await getAuthHeaders();
+  const result = await apiFetch(`${API_URL}/api/market/klines/${encodeURIComponent(symbol)}?interval=${interval}`, {
     headers
   });
   return result;

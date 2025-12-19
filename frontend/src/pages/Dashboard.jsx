@@ -12,6 +12,13 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadCoins();
+
+    // Refresh prices every 5 seconds to provide live updates
+    const interval = setInterval(() => {
+      loadCoins();
+    }, 5000);
+
+    return () => clearInterval(interval);
   }, []);
 
   const loadCoins = async () => {
@@ -90,9 +97,8 @@ export default function Dashboard() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <div className={`text-sm font-medium flex items-center justify-end space-x-1 ${
-                        coin.change_24h >= 0 ? 'text-primary-500' : 'text-danger-500'
-                      }`}>
+                      <div className={`text-sm font-medium flex items-center justify-end space-x-1 ${coin.change_24h >= 0 ? 'text-primary-500' : 'text-danger-500'
+                        }`}>
                         {coin.change_24h >= 0 ? (
                           <TrendingUp className="w-4 h-4" />
                         ) : (

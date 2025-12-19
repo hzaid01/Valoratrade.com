@@ -90,18 +90,71 @@ def get_user_keys(token: Optional[str]) -> Optional[dict]:
 @router.get("/top-coins")
 async def get_top_coins(
     request: Request,
-    limit: int = Query(default=100, ge=1, le=500, description="Number of coins to return")
+    limit: int = Query(default=100, ge=1, le=500, description="Number of coins to return"),
+    authorization: Optional[str] = Header(None)
 ):
     """
     Get top cryptocurrencies by trading volume.
     """
     try:
-        binance_service = BinanceService()
+        # Get user API keys if authenticated
+        token = validate_authorization(authorization)
+        user_keys = get_user_keys(token)
+        
+        binance_api_key = user_keys.get("binance_api_key") if user_keys else None
+        binance_secret = user_keys.get("binance_secret_key") if user_keys else None
+
+        binance_service = BinanceService(binance_api_key, binance_secret)
         coins = binance_service.get_top_coins(limit)
         return {"success": True, "data": coins}
     except Exception as e:
         logger.error(f"Error fetching top coins: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch market data")
+
+
+@router.get("/klines/{symbol}")
+async def get_klines(
+    request: Request,
+    symbol: str, 
+    interval: str = "1h",
+    limit: int = 500,
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Get historical kline data for a symbol.
+    """
+    try:
+        # Validate symbol format
+        symbol = symbol.upper().strip()
+        if not symbol.endswith("USDT"):
+            symbol = f"{symbol}USDT"
+            
+        # Get user API keys if authenticated (optional here, but good for rate limits)
+        token = validate_authorization(authorization)
+        user_keys = get_user_keys(token)
+        
+        binance_api_key = user_keys.get("binance_api_key") if user_keys else None
+        binance_secret = user_keys.get("binance_secret_key") if user_keys else None
+        
+        binance_service = BinanceService(binance_api_key, binance_secret)
+        df = binance_service.get_klines(symbol, interval, limit)
+        
+        # Format for lightweight-charts: time (timestamp in seconds), open, high, low, close
+        data = []
+        for index, row in df.iterrows():
+            data.append({
+                "time": int(index.timestamp()),
+                "open": float(row['open']),
+                "high": float(row['high']),
+                "low": float(row['low']),
+                "close": float(row['close']),
+                "volume": float(row['volume'])
+            })
+            
+        return {"success": True, "data": data}
+    except Exception as e:
+        logger.error(f"Error fetching klines for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch kline data")
 
 
 @router.get("/analyze/{symbol}")

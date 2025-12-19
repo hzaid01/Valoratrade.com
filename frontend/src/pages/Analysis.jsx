@@ -3,15 +3,17 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   Loader2,
   ArrowLeft,
-  TrendingUp,
-  TrendingDown,
   Activity,
   Target,
   Shield,
   Brain,
-  AlertTriangle
+  AlertTriangle,
+  TrendingUp,
+  TrendingDown
 } from 'lucide-react';
 import Layout from '../components/Layout';
+import CandlestickChart from '../components/CandlestickChart';
+import WhaleMonitor from '../components/WhaleMonitor';
 import { analyzeSymbol } from '../lib/api';
 
 export default function Analysis() {
@@ -107,170 +109,179 @@ export default function Analysis() {
           </div>
         </div>
 
+        {/* Live Chart Section */}
+        <CandlestickChart
+          symbol={data.symbol}
+          supportResistance={data.support_resistance}
+        />
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-          <div className={`glass-effect rounded-2xl p-6 border-2 ${getSignalBg(data.final_signal)}`}>
-            <div className="flex items-center space-x-3 mb-4">
-              <Brain className="w-6 h-6 text-primary-500" />
-              <h2 className="text-xl font-bold text-white">Final Signal</h2>
-            </div>
-            <div className={`text-4xl font-bold mb-2 ${getSignalColor(data.final_signal)}`}>
-              {data.final_signal}
-            </div>
-            <p className="text-sm text-gray-400">{data.ai_decision.reason}</p>
+
+          {/* Left Column: Whale Monitor (Takes up 1 column) */}
+          <div className="lg:col-span-1 h-[600px]">
+            <WhaleMonitor symbol={data.symbol} />
           </div>
 
-          <div className="glass-effect rounded-2xl p-6">
-            <div className="flex items-center space-x-3 mb-4">
-              <Activity className="w-6 h-6 text-primary-500" />
-              <h2 className="text-xl font-bold text-white">LSTM Signal</h2>
-            </div>
-            <div className={`text-3xl font-bold mb-2 ${getSignalColor(data.lstm_signal.signal)}`}>
-              {data.lstm_signal.signal}
-            </div>
-            <p className="text-sm text-gray-400">
-              Confidence: {(data.lstm_signal.confidence * 100).toFixed(1)}%
-            </p>
-          </div>
+          {/* Right Column: AI Signals & Analysis (Takes up 2 columns) */}
+          <div className="lg:col-span-2 space-y-6">
 
-          <div className="glass-effect rounded-2xl p-6">
-            <div className="flex items-center space-x-3 mb-4">
-              <Shield className="w-6 h-6 text-primary-500" />
-              <h2 className="text-xl font-bold text-white">Support & Resistance</h2>
-            </div>
-            <div className="space-y-2">
-              <div>
-                <p className="text-sm text-gray-400">Resistance</p>
-                <p className="text-lg font-semibold text-danger-500">
-                  ${data.support_resistance.resistance.toLocaleString()}
-                </p>
+            {/* Top Signals Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className={`glass-effect rounded-2xl p-6 border-2 ${getSignalBg(data.final_signal)}`}>
+                <div className="flex items-center space-x-3 mb-4">
+                  <Brain className="w-6 h-6 text-primary-500" />
+                  <h2 className="text-xl font-bold text-white">Final Signal</h2>
+                </div>
+                <div className={`text-4xl font-bold mb-2 ${getSignalColor(data.final_signal)}`}>
+                  {data.final_signal}
+                </div>
+                <p className="text-sm text-gray-400">{data.ai_decision.reason}</p>
               </div>
-              <div>
-                <p className="text-sm text-gray-400">Support</p>
-                <p className="text-lg font-semibold text-primary-500">
-                  ${data.support_resistance.support.toLocaleString()}
+
+              <div className="glass-effect rounded-2xl p-6">
+                <div className="flex items-center space-x-3 mb-4">
+                  <Activity className="w-6 h-6 text-primary-500" />
+                  <h2 className="text-xl font-bold text-white">LSTM Signal</h2>
+                </div>
+                <div className={`text-3xl font-bold mb-2 ${getSignalColor(data.lstm_signal.signal)}`}>
+                  {data.lstm_signal.signal}
+                </div>
+                <p className="text-sm text-gray-400">
+                  Confidence: {(data.lstm_signal.confidence * 100).toFixed(1)}%
                 </p>
               </div>
             </div>
-          </div>
-        </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          <div className="glass-effect rounded-2xl p-6">
-            <h2 className="text-xl font-bold text-white mb-4">Technical Indicators</h2>
-            <div className="space-y-4">
-              <div>
-                <div className="flex justify-between mb-2">
-                  <span className="text-gray-400">RSI</span>
-                  <span className={`font-semibold ${data.indicators.rsi > 70 ? 'text-danger-500' :
-                      data.indicators.rsi < 30 ? 'text-primary-500' :
-                        'text-gray-300'
-                    }`}>
-                    {data.indicators.rsi.toFixed(2)}
-                  </span>
+            {/* Support/Resistance & Trade Setup */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="glass-effect rounded-2xl p-6">
+                <div className="flex items-center space-x-3 mb-4">
+                  <Shield className="w-6 h-6 text-primary-500" />
+                  <h2 className="text-xl font-bold text-white">Support & Resistance</h2>
                 </div>
-                <div className="w-full bg-gray-800 rounded-full h-2">
-                  <div
-                    className={`h-2 rounded-full ${data.indicators.rsi > 70 ? 'bg-danger-500' :
-                        data.indicators.rsi < 30 ? 'bg-primary-500' :
-                          'bg-gray-500'
-                      }`}
-                    style={{ width: `${Math.min(data.indicators.rsi, 100)}%` }}
-                  ></div>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex justify-between mb-2">
-                  <span className="text-gray-400">MACD</span>
-                  <span className={`font-semibold ${data.indicators.macd.histogram > 0 ? 'text-primary-500' : 'text-danger-500'
-                    }`}>
-                    {data.indicators.macd.macd.toFixed(2)}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="space-y-2">
                   <div>
-                    <p className="text-gray-500">Signal</p>
-                    <p className="text-gray-300">{data.indicators.macd.signal.toFixed(2)}</p>
+                    <p className="text-sm text-gray-400">Resistance</p>
+                    <p className="text-lg font-semibold text-danger-500">
+                      ${data.support_resistance.resistance.toLocaleString()}
+                    </p>
                   </div>
                   <div>
-                    <p className="text-gray-500">Histogram</p>
-                    <p className={data.indicators.macd.histogram > 0 ? 'text-primary-500' : 'text-danger-500'}>
-                      {data.indicators.macd.histogram.toFixed(2)}
+                    <p className="text-sm text-gray-400">Support</p>
+                    <p className="text-lg font-semibold text-primary-500">
+                      ${data.support_resistance.support.toLocaleString()}
                     </p>
                   </div>
                 </div>
               </div>
 
-              <div>
-                <p className="text-gray-400 mb-2">EMAs</p>
-                <div className="grid grid-cols-3 gap-2 text-sm">
-                  <div>
-                    <p className="text-gray-500">EMA 9</p>
-                    <p className="text-gray-300">{data.indicators.ema.ema_9.toFixed(2)}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500">EMA 21</p>
-                    <p className="text-gray-300">{data.indicators.ema.ema_21.toFixed(2)}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500">EMA 50</p>
-                    <p className="text-gray-300">{data.indicators.ema.ema_50.toFixed(2)}</p>
-                  </div>
+              <div className="glass-effect rounded-2xl p-6">
+                <div className="flex items-center space-x-3 mb-4">
+                  <Target className="w-6 h-6 text-primary-500" />
+                  <h2 className="text-xl font-bold text-white">Trade Setup</h2>
                 </div>
+
+                {data.final_signal !== 'HOLD' ? (
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center py-2 border-b border-gray-800">
+                      <span className="text-gray-400">Entry Price</span>
+                      <span className="text-white font-semibold">
+                        ${data.trade_setup.entry_price.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-gray-800">
+                      <span className="text-gray-400">Stop Loss</span>
+                      <span className="text-danger-500 font-semibold">
+                        ${data.trade_setup.stop_loss.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center py-1 text-sm">
+                        <span className="text-gray-400">TP 1</span>
+                        <span className="text-primary-500 font-semibold">
+                          ${data.trade_setup.take_profit_1.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center py-1 text-sm">
+                        <span className="text-gray-400">TP 2</span>
+                        <span className="text-primary-500 font-semibold">
+                          ${data.trade_setup.take_profit_2.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center py-1 text-sm">
+                        <span className="text-gray-400">TP 3</span>
+                        <span className="text-primary-500 font-semibold">
+                          ${data.trade_setup.take_profit_3.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="bg-gray-800/50 rounded-lg p-2 mt-2">
+                      <p className="text-xs text-center text-gray-400">Risk/Reward: <span className="text-white font-medium">{data.trade_setup.risk_reward_ratio}</span></p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-400">
+                    No active trade setup. Signal is HOLD.
+                  </div>
+                )}
               </div>
             </div>
-          </div>
 
-          <div className="glass-effect rounded-2xl p-6">
-            <div className="flex items-center space-x-3 mb-4">
-              <Target className="w-6 h-6 text-primary-500" />
-              <h2 className="text-xl font-bold text-white">Trade Setup</h2>
+            {/* Technical Indicators */}
+            <div className="glass-effect rounded-2xl p-6">
+              <h2 className="text-xl font-bold text-white mb-4">Technical Indicators</h2>
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between mb-2">
+                    <span className="text-gray-400">RSI</span>
+                    <span className={`font-semibold ${data.indicators.rsi > 70 ? 'text-danger-500' :
+                      data.indicators.rsi < 30 ? 'text-primary-500' :
+                        'text-gray-300'
+                      }`}>
+                      {data.indicators.rsi.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-800 rounded-full h-2">
+                    <div
+                      className={`h-2 rounded-full ${data.indicators.rsi > 70 ? 'bg-danger-500' :
+                        data.indicators.rsi < 30 ? 'bg-primary-500' :
+                          'bg-gray-500'
+                        }`}
+                      style={{ width: `${Math.min(data.indicators.rsi, 100)}%` }}
+                    ></div>
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center border-t border-gray-800 pt-3 text-sm">
+                  <div>
+                    <span className="text-gray-400 block">MACD</span>
+                    <span className={`font-semibold ${data.indicators.macd.histogram > 0 ? 'text-primary-500' : 'text-danger-500'}`}>
+                      {data.indicators.macd.histogram.toFixed(2)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block">EMA 9</span>
+                    <span className="font-semibold text-gray-300">
+                      {data.indicators.ema.ema_9.toFixed(2)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block">EMA 21</span>
+                    <span className="font-semibold text-gray-300">
+                      {data.indicators.ema.ema_21.toFixed(2)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 block">EMA 50</span>
+                    <span className="font-semibold text-gray-300">
+                      {data.indicators.ema.ema_50.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+              </div>
             </div>
 
-            {data.final_signal !== 'HOLD' ? (
-              <div className="space-y-3">
-                <div className="flex justify-between items-center py-2 border-b border-gray-800">
-                  <span className="text-gray-400">Entry Price</span>
-                  <span className="text-white font-semibold">
-                    ${data.trade_setup.entry_price.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center py-2 border-b border-gray-800">
-                  <span className="text-gray-400">Stop Loss</span>
-                  <span className="text-danger-500 font-semibold">
-                    ${data.trade_setup.stop_loss.toLocaleString()}
-                  </span>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center py-2">
-                    <span className="text-gray-400">Take Profit 1</span>
-                    <span className="text-primary-500 font-semibold">
-                      ${data.trade_setup.take_profit_1.toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center py-2">
-                    <span className="text-gray-400">Take Profit 2</span>
-                    <span className="text-primary-500 font-semibold">
-                      ${data.trade_setup.take_profit_2.toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center py-2">
-                    <span className="text-gray-400">Take Profit 3</span>
-                    <span className="text-primary-500 font-semibold">
-                      ${data.trade_setup.take_profit_3.toLocaleString()}
-                    </span>
-                  </div>
-                </div>
-                <div className="bg-gray-800/50 rounded-lg p-3 mt-4">
-                  <p className="text-sm text-gray-400">Risk/Reward Ratio</p>
-                  <p className="text-white font-medium">{data.trade_setup.risk_reward_ratio}</p>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center py-8 text-gray-400">
-                No active trade setup. Signal is HOLD.
-              </div>
-            )}
           </div>
         </div>
 
@@ -283,8 +294,8 @@ export default function Analysis() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {data.breaker_blocks.map((block, index) => (
                 <div key={index} className={`p-4 rounded-lg border ${block.type === 'bullish'
-                    ? 'bg-primary-500/10 border-primary-500'
-                    : 'bg-danger-500/10 border-danger-500'
+                  ? 'bg-primary-500/10 border-primary-500'
+                  : 'bg-danger-500/10 border-danger-500'
                   }`}>
                   <div className="flex items-center space-x-2 mb-2">
                     {block.type === 'bullish' ? (
