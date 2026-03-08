@@ -8,7 +8,7 @@ export default function WhaleMonitor({ symbol }) {
     const wsRef = useRef(null);
 
     useEffect(() => {
-        setTrades([]); // Clear previous trades on symbol change
+        // Trades cleared by key prop in parent
 
         const streamName = `${symbol.toLowerCase()}@aggTrade`;
         const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${streamName}`);

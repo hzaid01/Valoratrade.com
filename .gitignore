@@ -29,6 +29,16 @@ node_modules/
 dist/
 build/
 
+# Firebase
+.firebase/
+*-firebase-adminsdk*.json
+firebase-adminsdk*.json
+deploy_env.yaml
+.env.deploy
+
+# Security reports
+semgrep_report.json
+
 # System files
 .DS_Store
 Thumbs.db

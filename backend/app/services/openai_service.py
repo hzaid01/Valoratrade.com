@@ -20,13 +20,13 @@ class OpenAIService:
     def get_trading_decision(
         self,
         symbol: str,
-        lstm_signal: str,
+        signal_hint: str,
         indicators: Dict,
         support_resistance: Dict,
         max_retries: int = 5
     ) -> Dict:
         if not self.client:
-            return self._get_mock_decision(lstm_signal, indicators)
+            return self._get_mock_decision(signal_hint, indicators)
 
         global _openai_last_call
         
@@ -34,7 +34,7 @@ class OpenAIService:
             prompt = f"""
             Analyze the following trading data for {symbol}:
 
-            LSTM Model Signal: {lstm_signal}
+            LSTM Model Signal: {signal_hint}
 
             Technical Indicators:
             - RSI: {indicators['rsi']:.2f}
@@ -97,25 +97,25 @@ class OpenAIService:
                     raise
 
             logger.warning("OpenAI: exhausted retries, using mock decision")
-            return self._get_mock_decision(lstm_signal, indicators)
+            return self._get_mock_decision(signal_hint, indicators)
 
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
-            return self._get_mock_decision(lstm_signal, indicators)
+            return self._get_mock_decision(signal_hint, indicators)
 
-    def _get_mock_decision(self, lstm_signal: str, indicators: Dict) -> Dict:
+    def _get_mock_decision(self, signal_hint: str, indicators: Dict) -> Dict:
         rsi = indicators['rsi']
         macd_histogram = indicators['macd']['histogram']
 
-        if lstm_signal == "LONG" and rsi < 70 and macd_histogram > 0:
+        if signal_hint == "LONG" and rsi < 70 and macd_histogram > 0:
             return {
                 "signal": "LONG",
-                "reason": "LSTM model shows bullish signal, RSI not overbought, MACD positive momentum."
+                "reason": "Indicator signal is bullish, RSI not overbought, MACD positive momentum."
             }
-        elif lstm_signal == "SHORT" and rsi > 30 and macd_histogram < 0:
+        elif signal_hint == "SHORT" and rsi > 30 and macd_histogram < 0:
             return {
                 "signal": "SHORT",
-                "reason": "LSTM model shows bearish signal, RSI not oversold, MACD negative momentum."
+                "reason": "Indicator signal is bearish, RSI not oversold, MACD negative momentum."
             }
         else:
             return {

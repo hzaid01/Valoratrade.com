@@ -7,6 +7,7 @@ import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
 import Analysis from './pages/Analysis';
 import Settings from './pages/Settings';
+import SystemStatus from './pages/SystemStatus';
 
 function App() {
   const { initialize, loading } = useAuthStore();
@@ -49,6 +50,14 @@ function App() {
           element={
             <ProtectedRoute>
               <Settings />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/system"
+          element={
+            <ProtectedRoute>
+              <SystemStatus />
             </ProtectedRoute>
           }
         />

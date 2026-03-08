@@ -1,0 +1,41 @@
+{
+  "run_id": "SOLUSDT_v20260308_095100",
+  "dataset_snapshot_id": "sha256:b7c88601ad0b05f5",
+  "computed_at": "2026-03-08T09:52:18.710569",
+  "baselines": {
+    "buy_and_hold": {
+      "sharpe_ratio": -2.10967824448777,
+      "total_return": -0.37928185096153855,
+      "max_drawdown": 0.48108731019522777,
+      "profit_factor": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 1
+    },
+    "ema_crossover": {
+      "sharpe_ratio": -5.479539226515615,
+      "total_return": -0.3008824146826101,
+      "max_drawdown": 0.3265929376712402,
+      "profit_factor": 0.26571617316828716,
+      "win_rate": 0.19230769230769232,
+      "trade_count": 26
+    },
+    "breakout": {
+      "sharpe_ratio": -6.9051985292890805,
+      "total_return": -0.1825655686196337,
+      "max_drawdown": 0.2126316905058296,
+      "profit_factor": 0.3149255545797228,
+      "win_rate": 0.1891891891891892,
+      "trade_count": 37
+    },
+    "random_entry": {
+      "sharpe_ratio": 0.9142653087437993,
+      "total_return": 0.03313418002562529,
+      "max_drawdown": 0.12388350214232528,
+      "profit_factor": 1.3182020597281612,
+      "win_rate": 0.38461538461538464,
+      "trade_count": 26
+    }
+  },
+  "best_baseline": "random_entry",
+  "best_sharpe": 0.9142653087437993
+}

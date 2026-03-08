@@ -1,0 +1,6 @@
+BINANCE_API_KEY: "gwMlafoBTI26yay5J45OqYF3fGDMOCMHM7gm37x0yA0Om4iRg27WE3Uby2YOt6nr"
+BINANCE_API_SECRET: "XkIxyknZAPkL5DmZEXTVKKxKo0sCfznWJPtrgMzUx5q8yucQ2XzNBhanAlZCh9Rv"
+BINANCE_TESTNET: "false"
+GOOGLE_APPLICATION_CREDENTIALS: "./crypto-app-3c146-firebase-adminsdk.json"
+ALLOWED_ORIGINS: "http://localhost:5173,http://localhost:3000,https://valoratrade.web.app"
+ENCRYPTION_SECRET: "EQf7-g4oqjmWEDaHQQtpOQ="

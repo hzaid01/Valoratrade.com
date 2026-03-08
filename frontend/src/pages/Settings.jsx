@@ -4,11 +4,11 @@ import { Loader2, Save, Key, AlertCircle, CheckCircle2, XCircle, RefreshCw } fro
 import Layout from '../components/Layout';
 import { getUserSettings, updateUserSettings } from '../lib/api';
 import { useAuthStore } from '../store/authStore';
-import { supabase } from '../lib/supabase';
+import { auth } from '../lib/firebase';
 
 export default function Settings() {
   const navigate = useNavigate();
-  const { user, session } = useAuthStore();
+  const { user } = useAuthStore();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -28,15 +28,13 @@ export default function Settings() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        // Wait for session to be available - don't load if no session
-        if (!session?.access_token) {
-          console.warn('No session available when loading settings, waiting...');
-          // Give a brief moment for session to initialize, then retry
+        // Wait for user to be available
+        if (!user) {
+          console.warn('No user available when loading settings, waiting...');
           await new Promise(resolve => setTimeout(resolve, 500));
 
-          // Check session again after delay
-          const { data: { session: refreshedSession } } = await supabase.auth.getSession();
-          if (!refreshedSession?.access_token) {
+          // Check if user is authenticated
+          if (!auth.currentUser) {
             setAuthError(true);
             setError('Not authenticated. Please log in to access settings.');
             setLoading(false);
@@ -77,7 +75,7 @@ export default function Settings() {
     };
 
     loadSettings();
-  }, [session]);
+  }, [user]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();

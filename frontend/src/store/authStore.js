@@ -1,39 +1,34 @@
 import { create } from 'zustand';
-import { supabase } from '../lib/supabase';
+import {
+  auth,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged
+} from '../lib/firebase';
 
 export const useAuthStore = create((set, get) => ({
   user: null,
-  session: null,
   loading: true,
   _unsubscribe: null,
 
   setUser: (user) => set({ user }),
-  setSession: (session) => set({ session }),
   setLoading: (loading) => set({ loading }),
 
   signUp: async (email, password) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-    if (error) throw error;
-    return data;
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    return userCredential;
   },
 
   signIn: async (email, password) => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (error) throw error;
-    set({ user: data.user, session: data.session });
-    return data;
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    set({ user: userCredential.user });
+    return userCredential;
   },
 
   signOut: async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
-    set({ user: null, session: null });
+    await signOut(auth);
+    set({ user: null });
   },
 
   initialize: async () => {
@@ -45,31 +40,15 @@ export const useAuthStore = create((set, get) => ({
 
     set({ loading: true });
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-
-      // Set up auth state listener
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-        set({
-          session,
-          user: session?.user ?? null
-        });
-      });
-
+    // Set up auth state listener
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       set({
-        session,
-        user: session?.user ?? null,
-        loading: false,
-        _unsubscribe: () => subscription.unsubscribe()
-      });
-    } catch (error) {
-      console.error('Auth initialization error:', error);
-      set({
-        session: null,
-        user: null,
+        user: user ?? null,
         loading: false
       });
-    }
+    });
+
+    set({ _unsubscribe: unsubscribe });
   },
 
   // Cleanup method for component unmount

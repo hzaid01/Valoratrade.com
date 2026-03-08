@@ -1,0 +1,61 @@
+{
+    "indexes": [
+        {
+            "collectionGroup": "candles_1h",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "symbol",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "timestamp",
+                    "order": "DESCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "candles_1h",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "symbol",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "timestamp",
+                    "order": "ASCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "predictions",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "is_resolved",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "timestamp",
+                    "order": "ASCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "job_locks",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "symbol",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "job_type",
+                    "order": "ASCENDING"
+                }
+            ]
+        }
+    ],
+    "fieldOverrides": []
+}

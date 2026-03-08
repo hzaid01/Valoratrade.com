@@ -1,0 +1,27 @@
+{
+  "run_id": "BTCUSDT_v20260308_094815",
+  "symbol": "BTCUSDT",
+  "status": "completed",
+  "started_at": "2026-03-08T09:48:15.419337",
+  "completed_at": "2026-03-08T09:49:16.413941",
+  "duration_seconds": 60.994604,
+  "lineage": {
+    "dataset_snapshot_id": "sha256:8d5cf664a6be9acc",
+    "feature_version": "1.0.0",
+    "code_version": "git:ba28f2d",
+    "training_data_rows": 1203
+  },
+  "training_metrics": {
+    "accuracy_up": 1.0,
+    "accuracy_down": 1.0,
+    "mse_return": 4.924044898878507e-07,
+    "mse_volatility": 2.4692201659749026e-07,
+    "samples": 674
+  },
+  "validation_metrics": {
+    "val_accuracy_up": 0.5,
+    "val_accuracy_down": 0.5,
+    "val_samples": 12
+  },
+  "errors": []
+}

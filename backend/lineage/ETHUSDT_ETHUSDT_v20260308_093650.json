@@ -1,0 +1,39 @@
+{
+  "model_id": "ETHUSDT_ETHUSDT_v20260308_093650",
+  "model_version": "ETHUSDT_v20260308_093650",
+  "data_lineage": {
+    "dataset": "sha256:c786f2af53c94e0d",
+    "features": "1.0.0",
+    "snapshot": "sha256:c786f2af53c94e0d"
+  },
+  "training": {
+    "params": {
+      "seq_len": 168,
+      "patch_tst_epochs": 50,
+      "train_ratio": 0.7,
+      "val_ratio": 0.15
+    },
+    "timestamp": "2026-03-08T09:38:06.449490",
+    "metrics": {
+      "accuracy_up": 1.0,
+      "accuracy_down": 1.0,
+      "mse_return": 3.872446429148509e-07,
+      "mse_volatility": 2.3207522440506183e-07,
+      "samples": 674
+    }
+  },
+  "validation": {
+    "val_accuracy_up": 0.6666666666666666,
+    "val_accuracy_down": 0.5,
+    "val_samples": 12
+  },
+  "environment": {
+    "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "packages": {
+      "torch": "2.1.2+cpu",
+      "xgboost": "2.0.3",
+      "pandas": "2.1.4",
+      "numpy": "1.26.3"
+    }
+  }
+}

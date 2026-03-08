@@ -1,14 +1,50 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-dotenv==1.0.0
-pydantic==2.5.0
+# Production Trading System Dependencies
+
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
 python-multipart==0.0.6
-torch==2.1.0
-numpy==1.24.3
-pandas==2.1.3
-ta==0.11.0
-python-binance==1.0.19
-openai==1.3.5
-supabase==2.0.3
-cryptography==41.0.7
+pydantic==2.5.3
+
+# Rate Limiting & Security
 slowapi==0.1.9
+python-dotenv==1.0.0
+cryptography==41.0.7
+
+# Firebase
+firebase-admin>=6.2.0
+
+# Data & ML
+numpy==1.26.3
+pandas==2.1.4
+pyarrow==15.0.0
+scikit-learn==1.4.0
+
+# Deep Learning (PatchTST)
+torch==2.1.2
+
+# Gradient Boosting (Decision Model)
+xgboost==2.0.3
+lightgbm==4.2.0
+
+# Technical Analysis
+ta==0.11.0
+
+# Binance API
+python-binance==1.0.19
+
+# OpenAI (optional)
+openai==1.7.0
+
+# Model Persistence
+joblib==1.3.2
+
+# Utilities
+requests==2.31.0
+aiohttp==3.9.1
+google-cloud-storage==2.14.0
+
+# Development (optional)
+pytest==7.4.4
+pytest-asyncio==0.23.3
+httpx==0.26.0

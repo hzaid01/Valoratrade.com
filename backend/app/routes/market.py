@@ -8,13 +8,12 @@ from app.services.indicators import (
     calculate_indicators,
     calculate_support_resistance,
     detect_breaker_blocks,
-    prepare_lstm_features,
     analyze_indicators
 )
-from app.models.lstm_model import get_lstm_signal
 from app.services.openai_service import OpenAIService
 from app.services.trade_calculator import calculate_trade_setup
-from app.db import get_supabase
+from app.db import get_db
+from app.firebase_config import verify_firebase_token
 from app.utils.encryption import decrypt_value
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ router = APIRouter(prefix="/api/market", tags=["market"])
 
 def validate_authorization(authorization: Optional[str]) -> Optional[str]:
     """
-    Validate and extract JWT token if provided.
+    Validate and extract Firebase ID token if provided.
     Returns None if no valid authorization is provided.
     """
     if not authorization:
@@ -43,43 +42,34 @@ def validate_authorization(authorization: Optional[str]) -> Optional[str]:
 
 def get_user_keys(token: Optional[str]) -> Optional[dict]:
     """
-    Get decrypted user API keys from database.
+    Get decrypted user API keys from Firestore.
     Returns None if no token or no keys found.
     """
-    import jwt
-    import time
-    
     if not token:
         return None
     
     try:
-        # Decode JWT to extract user ID from 'sub' claim
+        # Verify Firebase token
         try:
-            decoded = jwt.decode(token, options={"verify_signature": False})
-            
-            # Check token expiration
-            exp = decoded.get('exp')
-            if exp and exp < time.time():
-                logger.warning("Token expired in get_user_keys")
-                return None
-            
-            user_id = decoded.get('sub')
+            decoded_token = verify_firebase_token(token)
+            user_id = decoded_token.get('uid')
             if not user_id:
                 logger.warning("No user ID in token")
                 return None
-                
-        except jwt.InvalidTokenError as e:
+        except ValueError as e:
             logger.warning(f"Invalid token in get_user_keys: {e}")
             return None
         
-        supabase = get_supabase()
-        result = supabase.table("user_api_keys").select("*").eq("user_id", user_id).maybeSingle().execute()
+        db = get_db()
+        doc_ref = db.collection("user_api_keys").document(user_id)
+        doc = doc_ref.get()
+        result_data = doc.to_dict() if doc.exists else None
         
-        if result.data:
+        if result_data:
             return {
-                "binance_api_key": decrypt_value(result.data.get("binance_api_key", "")),
-                "binance_secret_key": decrypt_value(result.data.get("binance_secret_key", "")),
-                "openai_api_key": decrypt_value(result.data.get("openai_api_key", ""))
+                "binance_api_key": decrypt_value(result_data.get("binance_api_key", "")),
+                "binance_secret_key": decrypt_value(result_data.get("binance_secret_key", "")),
+                "openai_api_key": decrypt_value(result_data.get("openai_api_key", ""))
             }
         return None
     except Exception as e:
@@ -109,7 +99,15 @@ async def get_top_coins(
         return {"success": True, "data": coins}
     except Exception as e:
         logger.error(f"Error fetching top coins: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch market data")
+        # Fallback to mock data if Binance fails (e.g. strict IP blocks)
+        try:
+            logger.info("Falling back to mock data")
+            mock_service = BinanceService()
+            coins = mock_service._get_mock_top_coins(limit)
+            return {"success": True, "data": coins}
+        except Exception as fallback_error:
+            logger.error(f"Fallback failed: {fallback_error}")
+            raise HTTPException(status_code=500, detail="Failed to fetch market data")
 
 
 @router.get("/klines/{symbol}")
@@ -129,7 +127,7 @@ async def get_klines(
         if not symbol.endswith("USDT"):
             symbol = f"{symbol}USDT"
             
-        # Get user API keys if authenticated (optional here, but good for rate limits)
+        # Get user API keys if authenticated
         token = validate_authorization(authorization)
         user_keys = get_user_keys(token)
         
@@ -139,7 +137,7 @@ async def get_klines(
         binance_service = BinanceService(binance_api_key, binance_secret)
         df = binance_service.get_klines(symbol, interval, limit)
         
-        # Format for lightweight-charts: time (timestamp in seconds), open, high, low, close
+        # Format for lightweight-charts
         data = []
         for index, row in df.iterrows():
             data.append({
@@ -197,24 +195,22 @@ async def analyze_symbol(
         support_resistance = calculate_support_resistance(df)
         breaker_blocks = detect_breaker_blocks(df)
 
-        # LSTM prediction
-        lstm_features = prepare_lstm_features(df)
-        lstm_signal, lstm_confidence = get_lstm_signal(lstm_features)
+        # NOTE: LSTM model removed — using indicator-based signal only
         
-        # Indicator-based signal (from update.py logic)
+        # Indicator-based signal
         indicator_signal = analyze_indicators(df)
 
         # AI decision
         openai_service = OpenAIService(openai_api_key)
         ai_decision = openai_service.get_trading_decision(
             symbol,
-            lstm_signal,
+            indicator_signal,
             indicators,
             support_resistance
         )
         
-        # Majority voting for final signal (from update.py logic)
-        signals = [s for s in [ai_decision['signal'], lstm_signal, indicator_signal] if s in ['LONG', 'SHORT']]
+        # Voting between AI decision and indicator signal
+        signals = [s for s in [ai_decision['signal'], indicator_signal] if s in ['LONG', 'SHORT']]
         if signals:
             long_count = signals.count('LONG')
             short_count = signals.count('SHORT')
@@ -223,8 +219,7 @@ async def analyze_symbol(
             elif short_count > long_count:
                 final_signal = 'SHORT'
             else:
-                # Tie-breaker: prefer indicator signal, then LSTM, then HOLD
-                final_signal = indicator_signal if indicator_signal in ['LONG', 'SHORT'] else (lstm_signal if lstm_signal in ['LONG', 'SHORT'] else 'HOLD')
+                final_signal = indicator_signal if indicator_signal in ['LONG', 'SHORT'] else 'HOLD'
         else:
             final_signal = 'HOLD'
 
@@ -236,7 +231,7 @@ async def analyze_symbol(
             support_resistance['resistance']
         )
 
-        logger.info(f"Analysis completed for {symbol}: LSTM={lstm_signal}, IND={indicator_signal}, AI={ai_decision['signal']}, FINAL={final_signal}")
+        logger.info(f"Analysis completed for {symbol}: IND={indicator_signal}, AI={ai_decision['signal']}, FINAL={final_signal}")
 
         return {
             "success": True,
@@ -246,10 +241,6 @@ async def analyze_symbol(
                 "indicators": indicators,
                 "support_resistance": support_resistance,
                 "breaker_blocks": breaker_blocks,
-                "lstm_signal": {
-                    "signal": lstm_signal,
-                    "confidence": lstm_confidence
-                },
                 "indicator_signal": indicator_signal,
                 "ai_decision": ai_decision,
                 "final_signal": final_signal,

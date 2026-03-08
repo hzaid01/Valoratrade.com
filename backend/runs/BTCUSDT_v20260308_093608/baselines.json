@@ -1,0 +1,41 @@
+{
+  "run_id": "BTCUSDT_v20260308_093608",
+  "dataset_snapshot_id": "sha256:8d5cf664a6be9acc",
+  "computed_at": "2026-03-08T09:36:46.137994",
+  "baselines": {
+    "buy_and_hold": {
+      "sharpe_ratio": -2.3099986754760473,
+      "total_return": -0.27131960697725777,
+      "max_drawdown": 0.3558976022597038,
+      "profit_factor": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 1
+    },
+    "ema_crossover": {
+      "sharpe_ratio": -5.17099194628794,
+      "total_return": -0.4539036972060704,
+      "max_drawdown": 0.4649561205708754,
+      "profit_factor": 0.15692011537482076,
+      "win_rate": 0.125,
+      "trade_count": 32
+    },
+    "breakout": {
+      "sharpe_ratio": -6.031359712142475,
+      "total_return": -0.11906850479370679,
+      "max_drawdown": 0.14413540006350756,
+      "profit_factor": 0.37482699777384515,
+      "win_rate": 0.24242424242424243,
+      "trade_count": 33
+    },
+    "random_entry": {
+      "sharpe_ratio": 1.0206325059401478,
+      "total_return": 0.025769957007388822,
+      "max_drawdown": 0.07525676057183096,
+      "profit_factor": 1.4681247721930897,
+      "win_rate": 0.5384615384615384,
+      "trade_count": 26
+    }
+  },
+  "best_baseline": "random_entry",
+  "best_sharpe": 1.0206325059401478
+}

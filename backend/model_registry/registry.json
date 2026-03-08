@@ -1,0 +1,240 @@
+{
+  "models": {
+    "BTCUSDT_BTCUSDT_v20260308_094815": {
+      "model_id": "BTCUSDT_BTCUSDT_v20260308_094815",
+      "version": "BTCUSDT_v20260308_094815",
+      "symbol": "BTCUSDT",
+      "created_at": "2026-03-08T09:49:16.416942",
+      "paths": {
+        "patch_tst": "runs\\BTCUSDT_v20260308_094815\\patchtst.pt",
+        "xgboost": "runs\\BTCUSDT_v20260308_094815\\xgboost_models.joblib"
+      },
+      "lineage": {
+        "dataset": "sha256:8d5cf664a6be9acc",
+        "features": "1.0.0",
+        "snapshot": "sha256:8d5cf664a6be9acc"
+      },
+      "metrics": {
+        "training": {
+          "mse_volatility": 2.4692201659749026e-07,
+          "accuracy_down": 1.0,
+          "samples": 674,
+          "mse_return": 4.924044898878507e-07,
+          "accuracy_up": 1.0
+        },
+        "validation": {
+          "val_samples": 12,
+          "val_accuracy_up": 0.5,
+          "val_accuracy_down": 0.5
+        },
+        "forward": null
+      },
+      "status": "champion",
+      "promoted_at": "2026-03-08T10:21:09.851602",
+      "retired_at": null
+    },
+    "ETHUSDT_ETHUSDT_v20260308_094921": {
+      "model_id": "ETHUSDT_ETHUSDT_v20260308_094921",
+      "version": "ETHUSDT_v20260308_094921",
+      "symbol": "ETHUSDT",
+      "created_at": "2026-03-08T09:50:51.644302",
+      "paths": {
+        "patch_tst": "runs\\ETHUSDT_v20260308_094921\\patchtst.pt",
+        "xgboost": "runs\\ETHUSDT_v20260308_094921\\xgboost_models.joblib"
+      },
+      "lineage": {
+        "dataset": "sha256:c786f2af53c94e0d",
+        "features": "1.0.0",
+        "snapshot": "sha256:c786f2af53c94e0d"
+      },
+      "metrics": {
+        "training": {
+          "mse_volatility": 2.1813819967809445e-07,
+          "accuracy_down": 1.0,
+          "samples": 674,
+          "mse_return": 3.188103481991661e-07,
+          "accuracy_up": 1.0
+        },
+        "validation": {
+          "val_samples": 12,
+          "val_accuracy_up": 0.5,
+          "val_accuracy_down": 0.5
+        },
+        "forward": null
+      },
+      "status": "champion",
+      "promoted_at": "2026-03-08T10:21:10.207712",
+      "retired_at": null
+    },
+    "BTCUSDT_BTCUSDT_v20260308_093608": {
+      "model_id": "BTCUSDT_BTCUSDT_v20260308_093608",
+      "version": "BTCUSDT_v20260308_093608",
+      "symbol": "BTCUSDT",
+      "created_at": "2026-03-08T09:36:46.139993",
+      "paths": {
+        "patch_tst": "runs\\BTCUSDT_v20260308_093608\\patchtst.pt",
+        "xgboost": "runs\\BTCUSDT_v20260308_093608\\xgboost_models.joblib"
+      },
+      "lineage": {
+        "dataset": "sha256:8d5cf664a6be9acc",
+        "features": "1.0.0",
+        "snapshot": "sha256:8d5cf664a6be9acc"
+      },
+      "metrics": {
+        "training": {
+          "mse_volatility": 2.4410690068127263e-07,
+          "accuracy_down": 1.0,
+          "samples": 674,
+          "mse_return": 4.95920282149528e-07,
+          "accuracy_up": 1.0
+        },
+        "validation": {
+          "val_samples": 12,
+          "val_accuracy_up": 0.08333333333333333,
+          "val_accuracy_down": 0.5
+        },
+        "forward": null
+      },
+      "status": "registered",
+      "promoted_at": null,
+      "retired_at": null
+    },
+    "SOLUSDT_SOLUSDT_v20260308_095100": {
+      "model_id": "SOLUSDT_SOLUSDT_v20260308_095100",
+      "version": "SOLUSDT_v20260308_095100",
+      "symbol": "SOLUSDT",
+      "created_at": "2026-03-08T09:52:18.713629",
+      "paths": {
+        "patch_tst": "runs\\SOLUSDT_v20260308_095100\\patchtst.pt",
+        "xgboost": "runs\\SOLUSDT_v20260308_095100\\xgboost_models.joblib"
+      },
+      "lineage": {
+        "dataset": "sha256:b7c88601ad0b05f5",
+        "features": "1.0.0",
+        "snapshot": "sha256:b7c88601ad0b05f5"
+      },
+      "metrics": {
+        "training": {
+          "mse_volatility": 3.0001431857560716e-07,
+          "accuracy_down": 1.0,
+          "samples": 674,
+          "mse_return": 8.181247308123765e-07,
+          "accuracy_up": 1.0
+        },
+        "validation": {
+          "val_samples": 12,
+          "val_accuracy_up": 0.4166666666666667,
+          "val_accuracy_down": 0.75
+        },
+        "forward": null
+      },
+      "status": "champion",
+      "promoted_at": "2026-03-08T10:21:11.255160",
+      "retired_at": null
+    },
+    "BTCUSDT_BTCUSDT_v20260308_084118": {
+      "model_id": "BTCUSDT_BTCUSDT_v20260308_084118",
+      "version": "BTCUSDT_v20260308_084118",
+      "symbol": "BTCUSDT",
+      "created_at": "2026-03-08T08:55:00.134329",
+      "paths": {
+        "patch_tst": "runs/BTCUSDT_v20260308_084118/patchtst.pt",
+        "xgboost": "runs/BTCUSDT_v20260308_084118/xgboost_models.joblib"
+      },
+      "lineage": {
+        "dataset": "sha256:8d5cf664a6be9acc",
+        "features": "1.0.0",
+        "snapshot": "sha256:8d5cf664a6be9acc"
+      },
+      "metrics": {
+        "training": {
+          "mse_volatility": 2.3236436482360833e-07,
+          "accuracy_down": 1.0,
+          "samples": 674,
+          "mse_return": 4.5622814332979566e-07,
+          "accuracy_up": 1.0
+        },
+        "validation": {
+          "val_samples": 12,
+          "val_accuracy_up": 0.0,
+          "val_accuracy_down": 0.5
+        },
+        "forward": null
+      },
+      "status": "retired",
+      "promoted_at": "2026-03-08T08:55:01.795902",
+      "retired_at": "2026-03-08T10:21:09.851602"
+    },
+    "ETHUSDT_ETHUSDT_v20260308_093650": {
+      "model_id": "ETHUSDT_ETHUSDT_v20260308_093650",
+      "version": "ETHUSDT_v20260308_093650",
+      "symbol": "ETHUSDT",
+      "created_at": "2026-03-08T09:38:06.135587",
+      "paths": {
+        "patch_tst": "runs\\ETHUSDT_v20260308_093650\\patchtst.pt",
+        "xgboost": "runs\\ETHUSDT_v20260308_093650\\xgboost_models.joblib"
+      },
+      "lineage": {
+        "dataset": "sha256:c786f2af53c94e0d",
+        "features": "1.0.0",
+        "snapshot": "sha256:c786f2af53c94e0d"
+      },
+      "metrics": {
+        "training": {
+          "mse_volatility": 2.3207522440506183e-07,
+          "accuracy_down": 1.0,
+          "samples": 674,
+          "mse_return": 3.872446429148509e-07,
+          "accuracy_up": 1.0
+        },
+        "validation": {
+          "val_samples": 12,
+          "val_accuracy_up": 0.6666666666666666,
+          "val_accuracy_down": 0.5
+        },
+        "forward": null
+      },
+      "status": "retired",
+      "promoted_at": "2026-03-08T09:38:06.450568",
+      "retired_at": "2026-03-08T10:21:10.207712"
+    },
+    "SOLUSDT_SOLUSDT_v20260308_093813": {
+      "model_id": "SOLUSDT_SOLUSDT_v20260308_093813",
+      "version": "SOLUSDT_v20260308_093813",
+      "symbol": "SOLUSDT",
+      "created_at": "2026-03-08T09:38:49.243383",
+      "paths": {
+        "patch_tst": "runs\\SOLUSDT_v20260308_093813\\patchtst.pt",
+        "xgboost": "runs\\SOLUSDT_v20260308_093813\\xgboost_models.joblib"
+      },
+      "lineage": {
+        "dataset": "sha256:b7c88601ad0b05f5",
+        "features": "1.0.0",
+        "snapshot": "sha256:b7c88601ad0b05f5"
+      },
+      "metrics": {
+        "training": {
+          "mse_volatility": 2.9840056842711114e-07,
+          "accuracy_down": 1.0,
+          "samples": 674,
+          "mse_return": 7.120402757065683e-07,
+          "accuracy_up": 1.0
+        },
+        "validation": {
+          "val_samples": 12,
+          "val_accuracy_up": 0.25,
+          "val_accuracy_down": 0.75
+        },
+        "forward": null
+      },
+      "status": "retired",
+      "promoted_at": "2026-03-08T09:38:49.566058",
+      "retired_at": "2026-03-08T10:21:11.255160"
+    }
+  },
+  "champions": {
+    "BTCUSDT": "BTCUSDT_BTCUSDT_v20260308_094815",
+    "SOLUSDT": "SOLUSDT_SOLUSDT_v20260308_095100",
+    "ETHUSDT": "ETHUSDT_ETHUSDT_v20260308_094921"
+  }
+}

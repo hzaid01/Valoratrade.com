@@ -1,0 +1,14 @@
+{
+  "version": "ETHUSDT_1h_v20260308_092731",
+  "symbol": "ETHUSDT",
+  "timeframe": "1h",
+  "start_date": "2026-01-25T18:00:00",
+  "end_date": "2026-03-08T09:00:00",
+  "row_count": 1000,
+  "checksum": "1b7a00b1ce075025",
+  "created_at": "2026-03-08T09:27:31.096113",
+  "metadata": {
+    "source": "binance",
+    "job": "retrain"
+  }
+}

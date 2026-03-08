@@ -39,6 +39,7 @@ class BinanceService:
             print(f"Binance API error: {e}")
             return self._get_mock_top_coins(limit)
         except Exception as e:
+            # Catch all other errors (including APIError from ip restrictions)
             print(f"Error fetching top coins: {e}")
             return self._get_mock_top_coins(limit)
 
@@ -63,6 +64,7 @@ class BinanceService:
             print(f"Binance API error: {e}")
             return self._get_mock_klines()
         except Exception as e:
+            # Catch all other errors (including APIError from ip restrictions)
             print(f"Error fetching klines: {e}")
             return self._get_mock_klines()
 

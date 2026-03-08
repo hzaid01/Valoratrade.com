@@ -71,9 +71,9 @@ def decrypt_value(encrypted_value: str) -> str:
         f = Fernet(key)
         decrypted = f.decrypt(encrypted_value.encode())
         return decrypted.decode()
-    except Exception as e:
+    except Exception:
         # Log the error but don't expose details
-        print(f"Decryption failed - key may have been corrupted or changed")
+        print("Decryption failed - key may have been corrupted or changed")
         return ""
 
 

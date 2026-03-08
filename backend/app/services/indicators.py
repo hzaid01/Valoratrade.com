@@ -2,12 +2,11 @@ import pandas as pd
 import numpy as np
 from ta.momentum import RSIIndicator
 from ta.trend import MACD, EMAIndicator
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 def calculate_indicators(df: pd.DataFrame) -> Dict:
     close = df['close']
-    high = df['high']
-    low = df['low']
+    # high/low unused
 
     rsi_indicator = RSIIndicator(close=close, window=14)
     rsi = rsi_indicator.rsi().iloc[-1]
@@ -71,27 +70,6 @@ def detect_breaker_blocks(df: pd.DataFrame, lookback: int = 50) -> List[Dict]:
             })
 
     return breaker_blocks[-5:] if len(breaker_blocks) > 5 else breaker_blocks
-
-def prepare_lstm_features(df: pd.DataFrame) -> np.ndarray:
-    indicators = calculate_indicators(df)
-
-    features = [
-        indicators['rsi'] / 100,
-        indicators['macd']['macd'],
-        indicators['macd']['signal'],
-        indicators['macd']['histogram'],
-        indicators['ema']['ema_9'],
-        indicators['ema']['ema_21'],
-        indicators['ema']['ema_50'],
-        float(df['close'].iloc[-1]),
-        float(df['volume'].iloc[-1]),
-        float(df['high'].iloc[-1] - df['low'].iloc[-1])
-    ]
-
-    sequence_length = 60
-    feature_matrix = np.tile(features, (sequence_length, 1))
-
-    return feature_matrix
 
 
 def analyze_indicators(df: pd.DataFrame) -> str:

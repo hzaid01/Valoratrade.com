@@ -1,0 +1,14 @@
+{
+  "version": "SOLUSDT_1h_v20260308_092732",
+  "symbol": "SOLUSDT",
+  "timeframe": "1h",
+  "start_date": "2026-01-25T18:00:00",
+  "end_date": "2026-03-08T09:00:00",
+  "row_count": 1000,
+  "checksum": "3f2c77c3f5e8649c",
+  "created_at": "2026-03-08T09:27:32.808767",
+  "metadata": {
+    "source": "binance",
+    "job": "retrain"
+  }
+}
