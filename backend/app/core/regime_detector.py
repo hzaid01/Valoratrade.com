@@ -32,7 +32,8 @@ class MarketRegime(Enum):
         return self in (
             MarketRegime.TRENDING_UP,
             MarketRegime.TRENDING_DOWN,
-            MarketRegime.LOW_VOLATILITY
+            MarketRegime.LOW_VOLATILITY,
+            MarketRegime.RANGING  # RANGING now tradeable
         )
     
     @property
@@ -75,38 +76,18 @@ class RegimeState:
 class RegimeDetector:
     """
     Detects market regime using ADX, volatility, and trend indicators.
-    
-    Regime detection is used by Strategy Engine to:
-    - Filter signals in choppy markets
-    - Adjust position sizes
-    - Modify stop-loss/take-profit levels
     """
     
-    # Thresholds
     ADX_TRENDING = 25.0
     ADX_RANGING = 20.0
-    VOLATILITY_HIGH_RATIO = 1.5  # 50% above average
-    VOLATILITY_LOW_RATIO = 0.7   # 30% below average
+    VOLATILITY_HIGH_RATIO = 1.5
+    VOLATILITY_LOW_RATIO = 0.7
     
     def __init__(self):
         self._history: list = []
         self._max_history = 100
     
-    def detect(
-        self,
-        df: pd.DataFrame,
-        features: Optional[Dict[str, float]] = None
-    ) -> RegimeState:
-        """
-        Detect current market regime.
-        
-        Args:
-            df: OHLCV DataFrame with at least 50 candles
-            features: Pre-computed features (optional optimization)
-            
-        Returns:
-            RegimeState with current regime and metrics
-        """
+    def detect(self, df: pd.DataFrame, features: Optional[Dict[str, float]] = None) -> RegimeState:
         if len(df) < 50:
             return RegimeState(
                 regime=MarketRegime.UNKNOWN,
@@ -117,15 +98,11 @@ class RegimeDetector:
                 timestamp=df.index[-1] if not df.empty else pd.Timestamp.now()
             )
         
-        # Compute metrics
         adx = self._compute_adx(df)
         volatility_ratio = self._compute_volatility_ratio(df)
         trend_direction = self._compute_trend_direction(df)
         
-        # Determine regime
-        regime, confidence = self._classify_regime(
-            adx, volatility_ratio, trend_direction
-        )
+        regime, confidence = self._classify_regime(adx, volatility_ratio, trend_direction)
         
         state = RegimeState(
             regime=regime,
@@ -136,7 +113,6 @@ class RegimeDetector:
             timestamp=df.index[-1]
         )
         
-        # Store history
         self._history.append(state)
         if len(self._history) > self._max_history:
             self._history.pop(0)
@@ -144,41 +120,34 @@ class RegimeDetector:
         return state
     
     def _compute_adx(self, df: pd.DataFrame) -> float:
-        """Compute ADX (Average Directional Index)."""
         high = df['high']
         low = df['low']
         close = df['close']
         
-        # True Range
         tr = pd.concat([
             high - low,
             abs(high - close.shift(1)),
             abs(low - close.shift(1))
         ], axis=1).max(axis=1)
         
-        # Directional Movement
         up_move = high - high.shift(1)
         down_move = low.shift(1) - low
         
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
         
-        # Smoothed averages (14-period)
         period = 14
         atr = tr.rolling(period).mean()
         plus_di = 100 * pd.Series(plus_dm).rolling(period).mean() / atr
         minus_di = 100 * pd.Series(minus_dm).rolling(period).mean() / atr
         
-        # ADX
         dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
         adx = dx.rolling(period).mean()
         
         return float(adx.iloc[-1]) if not pd.isna(adx.iloc[-1]) else 0.0
     
     def _compute_volatility_ratio(self, df: pd.DataFrame) -> float:
-        """Compute current volatility vs historical average."""
         returns = df['close'].pct_change()
-        
         current_vol = returns.tail(20).std()
         historical_vol = returns.tail(100).std()
         
@@ -188,44 +157,26 @@ class RegimeDetector:
         return float(current_vol / historical_vol)
     
     def _compute_trend_direction(self, df: pd.DataFrame) -> float:
-        """
-        Compute trend direction score (-1 to 1).
-        Uses EMA relationship and price momentum.
-        """
         close = df['close']
         
-        # EMA relationship
         ema_20 = close.ewm(span=20).mean()
         ema_50 = close.ewm(span=50).mean()
         ema_score = (ema_20.iloc[-1] - ema_50.iloc[-1]) / ema_50.iloc[-1]
         
-        # Recent momentum
         momentum = close.pct_change(20).iloc[-1]
-        
-        # Combine
         direction = 0.6 * np.tanh(ema_score * 100) + 0.4 * np.tanh(momentum * 20)
         
         return float(np.clip(direction, -1, 1))
     
-    def _classify_regime(
-        self,
-        adx: float,
-        volatility_ratio: float,
-        trend_direction: float
-    ) -> Tuple[MarketRegime, float]:
-        """Classify regime based on metrics."""
-        
-        # High volatility takes precedence
+    def _classify_regime(self, adx: float, volatility_ratio: float, trend_direction: float) -> Tuple[MarketRegime, float]:
         if volatility_ratio > self.VOLATILITY_HIGH_RATIO:
             confidence = min((volatility_ratio - 1) / 0.5, 1.0)
             return MarketRegime.HIGH_VOLATILITY, confidence
         
-        # Low volatility
         if volatility_ratio < self.VOLATILITY_LOW_RATIO:
             confidence = min((1 - volatility_ratio) / 0.3, 1.0)
             return MarketRegime.LOW_VOLATILITY, confidence
         
-        # Trending
         if adx > self.ADX_TRENDING:
             confidence = min((adx - 20) / 20, 1.0)
             if trend_direction > 0.2:
@@ -233,12 +184,10 @@ class RegimeDetector:
             elif trend_direction < -0.2:
                 return MarketRegime.TRENDING_DOWN, confidence
         
-        # Ranging
         if adx < self.ADX_RANGING:
             confidence = min((25 - adx) / 10, 1.0)
             return MarketRegime.RANGING, confidence
         
-        # Default: moderate trend
         if trend_direction > 0.1:
             return MarketRegime.TRENDING_UP, 0.5
         elif trend_direction < -0.1:
@@ -247,11 +196,9 @@ class RegimeDetector:
         return MarketRegime.RANGING, 0.5
     
     def get_regime_history(self, periods: int = 24) -> list:
-        """Get recent regime history."""
         return [s.to_dict() for s in self._history[-periods:]]
     
     def is_regime_stable(self, lookback: int = 6) -> bool:
-        """Check if regime has been stable recently."""
         if len(self._history) < lookback:
             return False
         

@@ -25,7 +25,7 @@ export default function Analysis() {
   const [data, setData] = useState({
     symbol: symbol || 'BTCUSDT',
     current_price: 0,
-    final_signal: 'HOLD',
+    final_signal: 'NO_TRADE',
     mode: 'live',
     lstm_signal: { signal: 'HOLD', confidence: 0 },
     ai_decision: { reason: 'Initializing...' },
@@ -237,7 +237,7 @@ export default function Analysis() {
                   <h2 className="text-xl font-bold text-white">Trade Setup</h2>
                 </div>
 
-                {data.final_signal !== 'HOLD' && data.trade_setup.entry_price > 0 ? (
+                {['LONG', 'SHORT'].includes(data.final_signal) && data.trade_setup.entry_price > 0 ? (
                   <div className="space-y-3">
                     <div className="flex justify-between items-center py-2 border-b border-gray-800">
                       <span className="text-gray-400">Entry Price</span>
@@ -277,7 +277,7 @@ export default function Analysis() {
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-400">
-                    {error ? 'Trade setup unavailable' : 'No active trade setup. Signal is HOLD.'}
+                    {error ? 'Trade setup unavailable' : 'No active trade setup.'}
                   </div>
                 )}
               </div>

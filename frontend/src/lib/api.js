@@ -234,8 +234,8 @@ export async function analyzeSymbol(symbol) {
         reason: `Confidence: ${(signal.confidence * 100).toFixed(1)}% | Regime: ${signal.context?.regime || 'unknown'}`
       },
       support_resistance: {
-        support: signal.trade?.stop_loss || 0,
-        resistance: signal.trade?.take_profit || 0
+        support: signal.support_resistance?.support ?? signal.trade?.stop_loss ?? 0,
+        resistance: signal.support_resistance?.resistance ?? signal.trade?.take_profit ?? 0
       },
       trade_setup: {
         entry_price: signal.trade?.entry_price || 0,
@@ -246,9 +246,13 @@ export async function analyzeSymbol(symbol) {
         risk_reward_ratio: '1:2'
       },
       indicators: {
-        rsi: 50,
-        macd: { histogram: 0 },
-        ema: { ema_9: 0, ema_21: 0, ema_50: 0 }
+        rsi: signal.indicators?.rsi ?? 50,
+        macd: { histogram: signal.indicators?.macd?.histogram ?? 0 },
+        ema: {
+          ema_9: signal.indicators?.ema?.ema_9 ?? 0,
+          ema_21: signal.indicators?.ema?.ema_21 ?? 0,
+          ema_50: signal.indicators?.ema?.ema_50 ?? 0
+        }
       }
     }
   };

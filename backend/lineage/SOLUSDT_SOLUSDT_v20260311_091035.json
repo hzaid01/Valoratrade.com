@@ -1,0 +1,40 @@
+{
+  "model_id": "SOLUSDT_SOLUSDT_v20260311_091035",
+  "model_version": "SOLUSDT_v20260311_091035",
+  "data_lineage": {
+    "dataset": "sha256:b7c88601ad0b05f5",
+    "features": "1.0.0",
+    "snapshot": "sha256:b7c88601ad0b05f5"
+  },
+  "training": {
+    "params": {
+      "patch_tst": false,
+      "train_ratio": 0.7,
+      "val_ratio": 0.15
+    },
+    "timestamp": "2026-03-11T09:10:57.214723",
+    "metrics": {
+      "accuracy_up": 1.0,
+      "accuracy_down": 1.0,
+      "mse_return": 8.631053491634896e-07,
+      "mse_volatility": 6.225057111286351e-09,
+      "samples": 643
+    }
+  },
+  "validation": {
+    "val_accuracy_up": 0.0,
+    "val_accuracy_down": 0.0,
+    "val_samples": 0,
+    "val_sharpe_ratio": 0.0,
+    "sharpe_ratio": 0.0
+  },
+  "environment": {
+    "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "packages": {
+      "torch": "2.1.2+cpu",
+      "xgboost": "2.0.3",
+      "pandas": "2.1.4",
+      "numpy": "1.26.3"
+    }
+  }
+}

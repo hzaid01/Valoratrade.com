@@ -26,6 +26,68 @@ from app.core.regime_detector import MarketRegime
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/signals", tags=["signals"])
 
+
+def _safe_round(value, decimals, default=0.0):
+    """Convert to float safely, returning default if NaN/None."""
+    try:
+        v = float(value)
+        if v != v:  # NaN check
+            return default
+        return round(v, decimals)
+    except (TypeError, ValueError):
+        return default
+
+
+def _calculate_indicators(df):
+    """Calculate RSI, MACD, EMAs, Support and Resistance from OHLCV DataFrame."""
+    close = df['close']
+
+    # RSI(14)
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = (-delta).where(delta < 0, 0.0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+
+    # MACD (12, 26, 9)
+    ema_12 = close.ewm(span=12, adjust=False).mean()
+    ema_26 = close.ewm(span=26, adjust=False).mean()
+    macd_line = ema_12 - ema_26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    histogram = macd_line - signal_line
+
+    # EMAs
+    ema_9 = close.ewm(span=9, adjust=False).mean()
+    ema_21 = close.ewm(span=21, adjust=False).mean()
+    ema_50 = close.ewm(span=50, adjust=False).mean()
+
+    # Support and Resistance (last 20 candles)
+    last_20 = df.tail(20)
+    support = float(last_20['low'].min())
+    resistance = float(last_20['high'].max())
+
+    return {
+        "indicators": {
+            "rsi": _safe_round(rsi.iloc[-1], 2, 50.0),
+            "macd": {
+                "histogram": _safe_round(histogram.iloc[-1], 4, 0.0),
+                "macd_line": _safe_round(macd_line.iloc[-1], 4, 0.0),
+                "signal_line": _safe_round(signal_line.iloc[-1], 4, 0.0)
+            },
+            "ema": {
+                "ema_9": _safe_round(ema_9.iloc[-1], 2, 0.0),
+                "ema_21": _safe_round(ema_21.iloc[-1], 2, 0.0),
+                "ema_50": _safe_round(ema_50.iloc[-1], 2, 0.0)
+            }
+        },
+        "support_resistance": {
+            "support": _safe_round(support, 2, 0.0),
+            "resistance": _safe_round(resistance, 2, 0.0)
+        }
+    }
+
 @dataclass
 class SystemComponents:
     data_pipeline: DataPipeline
@@ -136,6 +198,9 @@ async def get_signal(
 
         current_price = candle_data.latest_close
 
+        # Calculate technical indicators from OHLCV data
+        tech_indicators = _calculate_indicators(df)
+
         # Step 2: Compute features
         features = sys.feature_engine.compute_features(df, symbol, Timeframes.DECISION_1H)
 
@@ -174,10 +239,12 @@ async def get_signal(
                 f"System state: model_registry is empty. "
                 f"Run training first: POST /api/training/trigger"
             )
-            return _system_not_ready_response(
+            response = _system_not_ready_response(
                 symbol,
                 "No champion model exists. Trigger training via POST /api/training/trigger"
             )
+            response["data"].update(tech_indicators)
+            return response
 
         # Step 5: Generate signal
         signal = sys.signal_generator.generate(
@@ -222,9 +289,12 @@ async def get_signal(
             model_version=signal.model_version
         )
 
+        response_data = signal.to_dict()
+        response_data.update(tech_indicators)
+
         return {
             "success": True,
-            "data": signal.to_dict()
+            "data": response_data
         }
 
     except HTTPException:

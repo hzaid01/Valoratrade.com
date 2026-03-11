@@ -1,0 +1,29 @@
+{
+  "run_id": "SOLUSDT_v20260311_091035",
+  "symbol": "SOLUSDT",
+  "status": "completed",
+  "started_at": "2026-03-11T09:10:35.983851",
+  "completed_at": "2026-03-11T09:10:56.591086",
+  "duration_seconds": 20.607235,
+  "lineage": {
+    "dataset_snapshot_id": "sha256:b7c88601ad0b05f5",
+    "feature_version": "1.0.0",
+    "code_version": "git:58e1601",
+    "training_data_rows": 1203
+  },
+  "training_metrics": {
+    "accuracy_up": 1.0,
+    "accuracy_down": 1.0,
+    "mse_return": 8.631053491634896e-07,
+    "mse_volatility": 6.225057111286351e-09,
+    "samples": 643
+  },
+  "validation_metrics": {
+    "val_accuracy_up": 0.0,
+    "val_accuracy_down": 0.0,
+    "val_samples": 0,
+    "val_sharpe_ratio": 0.0,
+    "sharpe_ratio": 0.0
+  },
+  "errors": []
+}

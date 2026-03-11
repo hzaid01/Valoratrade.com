@@ -34,7 +34,7 @@ export default function SystemStatus() {
                         <div>
                             <h3 className="text-sm font-semibold text-primary-500 mb-2">Model Stack</h3>
                             <ul className="space-y-1 text-sm text-gray-400">
-                                <li>• <span className="text-white">PatchTST</span> - Temporal embeddings</li>
+                                <li>• <span className="text-white">XGBoost</span> - Decision model (engineered features only)</li>
                                 <li>• <span className="text-white">XGBoost</span> - Decision model</li>
                                 <li>• Multi-target outputs (prob_up, prob_down, expected_return)</li>
                             </ul>

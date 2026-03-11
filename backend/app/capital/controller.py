@@ -402,11 +402,18 @@ class CapitalController:
         return sum(p.exposure for p in self.positions.values())
     
     def _get_price(self, symbol: str) -> float:
-        """Get current price for a symbol (placeholder)."""
-        # In real implementation, would fetch from data pipeline
+        """Get current price for a symbol."""
         if symbol in self.positions:
             return self.positions[symbol].entry_price
-        return 1.0  # Fallback
+        try:
+            import requests
+            url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+            response = requests.get(url, timeout=3)
+            if response.status_code == 200:
+                return float(response.json()['price'])
+        except Exception:
+            pass
+        return 1.0  # Last resort fallback only
     
     def _check_correlation(self, symbol: str) -> bool:
         """Check if new position would exceed correlation limits."""

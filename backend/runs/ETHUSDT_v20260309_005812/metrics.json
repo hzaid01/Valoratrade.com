@@ -1,0 +1,27 @@
+{
+  "run_id": "ETHUSDT_v20260309_005812",
+  "symbol": "ETHUSDT",
+  "status": "completed",
+  "started_at": "2026-03-09T00:58:12.885982",
+  "completed_at": "2026-03-09T00:58:26.388151",
+  "duration_seconds": 13.502169,
+  "lineage": {
+    "dataset_snapshot_id": "sha256:c786f2af53c94e0d",
+    "feature_version": "1.0.0",
+    "code_version": "git:58e1601",
+    "training_data_rows": 1203
+  },
+  "training_metrics": {
+    "accuracy_up": 1.0,
+    "accuracy_down": 1.0,
+    "mse_return": 8.671412717415321e-07,
+    "mse_volatility": 4.113377919020758e-07,
+    "samples": 842
+  },
+  "validation_metrics": {
+    "val_accuracy_up": 0.6777777777777778,
+    "val_accuracy_down": 0.7,
+    "val_samples": 180
+  },
+  "errors": []
+}

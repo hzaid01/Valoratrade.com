@@ -4,7 +4,7 @@ Production Trading System API
 FastAPI application with:
 - Strict startup validation (fails loudly on misconfiguration)
 - Multi-timeframe data pipeline
-- PatchTST + XGBoost model stack
+- XGBoost model stack
 - Capital survival controller
 - Forward-only evaluation
 - Champion/Challenger model promotion
@@ -95,7 +95,7 @@ app = FastAPI(
     Capital-safe, leakage-free crypto trading signal system.
 
     ## Architecture
-    - **PatchTST + XGBoost**: Modern time-series transformer + gradient boosting
+    - **XGBoost**: Gradient boosting decision model on engineered features
     - **1H Decision Timeframe**: All model logic strictly on hourly candles
     - **Multi-Timeframe Visualization**: 15m, 1H, 4H for frontend charts
     - **Capital Controller**: Kill-switch, exposure limits, drawdown throttling
@@ -153,7 +153,7 @@ async def root():
     return {
         "name": "Production Trading System API",
         "version": "2.1.0",
-        "architecture": "PatchTST + XGBoost",
+        "architecture": "XGBoost (engineered features)",
         "decision_timeframe": "1H",
         "status": "running"
     }
@@ -315,7 +315,7 @@ async def get_architecture():
         "success": True,
         "data": {
             "model_stack": {
-                "representation": "PatchTST (temporal embeddings)",
+                "representation": "Engineered features (35 causal indicators)",
                 "decision": "XGBoost (multi-target)",
                 "targets": ["prob_up", "prob_down", "expected_return", "volatility"]
             },

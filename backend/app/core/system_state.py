@@ -35,7 +35,7 @@ VALID_TRANSITIONS: Dict[SystemState, Set[SystemState]] = {
     SystemState.NO_DATA: {SystemState.COLLECTING_DATA},
     SystemState.COLLECTING_DATA: {SystemState.READY_FOR_TRAINING, SystemState.NO_DATA},
     SystemState.READY_FOR_TRAINING: {SystemState.TRAINING, SystemState.KILLED},
-    SystemState.TRAINING: {SystemState.TRAINING_FAILED, SystemState.CHALLENGER_READY},
+    SystemState.TRAINING: {SystemState.TRAINING_FAILED, SystemState.CHALLENGER_READY, SystemState.PROMOTED},
     SystemState.TRAINING_FAILED: {SystemState.READY_FOR_TRAINING, SystemState.KILLED},
     SystemState.CHALLENGER_READY: {SystemState.FORWARD_TESTING, SystemState.REJECTED},
     SystemState.FORWARD_TESTING: {SystemState.PROMOTED, SystemState.REJECTED},

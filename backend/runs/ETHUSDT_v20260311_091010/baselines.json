@@ -1,0 +1,41 @@
+{
+  "run_id": "ETHUSDT_v20260311_091010",
+  "dataset_snapshot_id": "sha256:c786f2af53c94e0d",
+  "computed_at": "2026-03-11T09:10:32.243436",
+  "baselines": {
+    "buy_and_hold": {
+      "sharpe_ratio": -2.346415889979061,
+      "total_return": -0.37868477834757475,
+      "max_drawdown": 0.4644985858419033,
+      "profit_factor": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 1
+    },
+    "ema_crossover": {
+      "sharpe_ratio": -4.002918963296436,
+      "total_return": -0.4968712842468034,
+      "max_drawdown": 0.5331968956715648,
+      "profit_factor": 0.22718808330179935,
+      "win_rate": 0.2222222222222222,
+      "trade_count": 27
+    },
+    "breakout": {
+      "sharpe_ratio": -4.117903802673086,
+      "total_return": -0.08088463108195965,
+      "max_drawdown": 0.12328986713017774,
+      "profit_factor": 0.6068632916731097,
+      "win_rate": 0.16129032258064516,
+      "trade_count": 31
+    },
+    "random_entry": {
+      "sharpe_ratio": -0.051074452302521396,
+      "total_return": -0.0075424992194201845,
+      "max_drawdown": 0.11883424506948803,
+      "profit_factor": 1.128394948164297,
+      "win_rate": 0.5384615384615384,
+      "trade_count": 26
+    }
+  },
+  "best_baseline": "random_entry",
+  "best_sharpe": -0.051074452302521396
+}
