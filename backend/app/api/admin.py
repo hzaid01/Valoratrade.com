@@ -25,7 +25,6 @@ class AdminComponents:
     baseline_strategies: BaselineStrategies
     champion_challenger: ChampionChallenger
     capital_controller: CapitalController
-    kill_switch: KillSwitch
 
 _components: Optional[AdminComponents] = None
 
@@ -35,12 +34,12 @@ def get_admin_components() -> AdminComponents:
     if _components is None:
         model_reg = ModelRegistry()
         base_strat = BaselineStrategies()
+        cap_controller = CapitalController()
         _components = AdminComponents(
             model_registry=model_reg,
             baseline_strategies=base_strat,
             champion_challenger=ChampionChallenger(model_reg, base_strat),
-            capital_controller=CapitalController(),
-            kill_switch=KillSwitch()
+            capital_controller=cap_controller
         )
     return _components
 
@@ -111,8 +110,6 @@ async def get_champion(symbol: str):
     try:
         symbol = symbol.upper()
         if not symbol.endswith("USDT"):
-            symbol = f"{symbol}USDT"
-        
             symbol = f"{symbol}USDT"
         
         sys = get_admin_components()
@@ -219,22 +216,24 @@ async def get_model_status():
 async def control_killswitch(request: KillSwitchRequest):
     """Control the kill switch."""
     try:
-        expected_key = "ADMIN_SECRET_KEY"  # In production, from env
+        import os
+        expected_key = os.getenv("ADMIN_SECRET_KEY")
+        if not expected_key:
+            raise HTTPException(status_code=500, detail="ADMIN_SECRET_KEY is not configured on server")
         
+        if request.admin_key != expected_key:
+            raise HTTPException(status_code=403, detail="Invalid admin key")
+
+        sys = get_admin_components()
         if request.action == "activate":
-            sys = get_admin_components()
-            sys.kill_switch.manual_activate(
-                request.reason or "Manual activation",
-                sys.capital_controller.equity_state.equity
-            )
+            sys.capital_controller._trigger_kill(request.reason or "Manual activation")
             return {
                 "success": True,
                 "data": {"status": "activated"}
             }
             
         elif request.action == "reset":
-            sys = get_admin_components()
-            success = sys.kill_switch.reset(request.admin_key, expected_key)
+            success = sys.capital_controller.reset_kill_switch(request.admin_key, expected_key)
             if not success:
                 raise HTTPException(status_code=403, detail="Invalid admin key")
             
@@ -259,7 +258,10 @@ async def get_killswitch_status():
         sys = get_admin_components()
         return {
             "success": True,
-            "data": sys.kill_switch.get_status()
+            "data": {
+                "is_killed": sys.capital_controller.is_killed,
+                "killswitch_details": sys.capital_controller.killswitch.get_status()
+            }
         }
         
     except Exception as e:

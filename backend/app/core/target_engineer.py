@@ -108,21 +108,75 @@ class TripleBarrierLabeler:
         # Compute ATR for volatility-adjusted barriers
         df['atr'] = self._compute_atr(df, atr_period)
         
-        # Initialize label columns
-        df['barrier_label'] = 0
-        df['barrier_horizon'] = 0
-        df['forward_return'] = 0.0
-        df['barrier_type'] = 'none'
-        
-        # Label each point (excluding last max_holding candles)
-        for i in range(len(df) - self.max_holding - 1):
-            result = self._label_point(df, i)
-            if result:
-                df.iloc[i, df.columns.get_loc('barrier_label')] = result.label
-                df.iloc[i, df.columns.get_loc('barrier_horizon')] = result.horizon
-                df.iloc[i, df.columns.get_loc('forward_return')] = result.return_pct
-                df.iloc[i, df.columns.get_loc('barrier_type')] = result.barrier_type
-        
+        # Pre-extract numpy arrays for fast vectorized indexing
+        close_arr = df['close'].to_numpy(dtype=np.float64)
+        high_arr = df['high'].to_numpy(dtype=np.float64)
+        low_arr = df['low'].to_numpy(dtype=np.float64)
+        atr_arr = df['atr'].to_numpy(dtype=np.float64)
+
+        n_rows = len(df)
+        barrier_labels = np.zeros(n_rows, dtype=np.int32)
+        barrier_horizons = np.zeros(n_rows, dtype=np.int32)
+        forward_returns = np.zeros(n_rows, dtype=np.float64)
+        barrier_types = np.full(n_rows, 'none', dtype=object)
+
+        max_holding = self.max_holding
+        profit_mult = self.profit_target_atr
+        stop_mult = self.stop_loss_atr
+        min_ret = self.min_return
+
+        for i in range(n_rows - max_holding - 1):
+            entry_price = close_arr[i]
+            atr = atr_arr[i]
+            if np.isnan(atr) or atr == 0:
+                continue
+
+            upper_barrier = entry_price + (atr * profit_mult)
+            lower_barrier = entry_price - (atr * stop_mult)
+
+            end_idx = min(i + max_holding + 1, n_rows)
+            sub_highs = high_arr[i + 1:end_idx]
+            sub_lows = low_arr[i + 1:end_idx]
+
+            tp_hits = np.where(sub_highs >= upper_barrier)[0]
+            sl_hits = np.where(sub_lows <= lower_barrier)[0]
+
+            first_tp = tp_hits[0] if len(tp_hits) > 0 else 999999
+            first_sl = sl_hits[0] if len(sl_hits) > 0 else 999999
+
+            if first_tp < first_sl:
+                horizon = int(first_tp + 1)
+                ret_pct = (upper_barrier - entry_price) / entry_price
+                barrier_labels[i] = int(BarrierLabel.TAKE_PROFIT)
+                barrier_horizons[i] = horizon
+                forward_returns[i] = ret_pct
+                barrier_types[i] = 'tp'
+            elif first_sl < first_tp:
+                horizon = int(first_sl + 1)
+                ret_pct = (lower_barrier - entry_price) / entry_price
+                barrier_labels[i] = int(BarrierLabel.STOP_LOSS)
+                barrier_horizons[i] = horizon
+                forward_returns[i] = ret_pct
+                barrier_types[i] = 'sl'
+            else:
+                final_idx = min(i + max_holding, n_rows - 1)
+                final_price = close_arr[final_idx]
+                ret_pct = (final_price - entry_price) / entry_price
+                barrier_horizons[i] = max_holding
+                forward_returns[i] = ret_pct
+                barrier_types[i] = 'timeout'
+                if abs(ret_pct) < min_ret:
+                    barrier_labels[i] = int(BarrierLabel.TIMEOUT)
+                elif ret_pct > 0:
+                    barrier_labels[i] = int(BarrierLabel.TAKE_PROFIT)
+                else:
+                    barrier_labels[i] = int(BarrierLabel.STOP_LOSS)
+
+        df['barrier_label'] = barrier_labels
+        df['barrier_horizon'] = barrier_horizons
+        df['forward_return'] = forward_returns
+        df['barrier_type'] = barrier_types
+
         # Add multi-horizon probability targets
         df = self._add_multi_horizon_targets(df)
         

@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from app.firebase_config import get_firestore
 
 from app.config import get_settings, CapitalConfig
+from app.capital.killswitch import KillSwitch
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,8 @@ class CapitalController:
             drawdown_pct=0.0
         )
         
-        # Control flags
+        # Control flags and integrated KillSwitch module
+        self.killswitch = KillSwitch()
         self.is_killed = False
         self.is_forced_flat = False
         self.no_trade_zones: List[Tuple[datetime, datetime]] = []
@@ -160,6 +162,8 @@ class CapitalController:
                 self.equity_state.drawdown = data.get('drawdown', 0.0)
                 self.equity_state.drawdown_pct = data.get('drawdown_pct', 0.0)
                 self.is_killed = data.get('is_killed', False)
+                if self.is_killed:
+                    self.killswitch.is_active = True
                 self.is_forced_flat = data.get('is_forced_flat', False)
                 logger.info("Capital controller state loaded from Firestore")
         except Exception as e:
@@ -173,7 +177,7 @@ class CapitalController:
                 "peak_equity": self.equity_state.peak_equity,
                 "drawdown": self.equity_state.drawdown,
                 "drawdown_pct": self.equity_state.drawdown_pct,
-                "is_killed": self.is_killed,
+                "is_killed": self.is_killed or self.killswitch.is_active,
                 "is_forced_flat": self.is_forced_flat,
                 "last_update": datetime.utcnow()
             }
@@ -217,8 +221,8 @@ class CapitalController:
         Returns:
             TradeApproval with decision and adjusted size
         """
-        # Check kill switch first
-        if self.is_killed:
+        # Check kill switch first (either controller flag or KillSwitch module)
+        if self.is_killed or self.killswitch.is_active:
             return TradeApproval(
                 approved=False,
                 reason=RejectionReason.KILL_SWITCH_ACTIVE,
@@ -282,16 +286,27 @@ class CapitalController:
                 message=f"Max concurrent trades ({self.config.max_concurrent_trades}) reached"
             )
         
+        # Fetch price securely (no silent fallbacks)
+        try:
+            current_price = self._get_price(symbol)
+        except Exception as e:
+            logger.error(f"Trade rejected: price fetch failed for {symbol}: {e}")
+            return TradeApproval(
+                approved=False,
+                reason=RejectionReason.SYSTEM_STATE,
+                message=f"Price unavailable for {symbol}: unable to evaluate risk exposure"
+            )
+
         # Check total exposure
         current_exposure = self._total_exposure()
-        proposed_exposure = proposed_size * self._get_price(symbol)
+        proposed_exposure = proposed_size * current_price
         new_exposure_pct = (current_exposure + proposed_exposure) / self.equity_state.equity
         
         if new_exposure_pct > self.config.max_exposure:
             # Try to adjust size
             available_exposure = (self.config.max_exposure * self.equity_state.equity) - current_exposure
             if available_exposure > 0:
-                adjusted_size = available_exposure / self._get_price(symbol)
+                adjusted_size = available_exposure / current_price
                 return TradeApproval(
                     approved=True,
                     adjusted_size=adjusted_size,
@@ -368,16 +383,20 @@ class CapitalController:
     def _trigger_kill(self, reason: str) -> None:
         """Activate kill switch."""
         self.is_killed = True
+        self.killswitch.manual_activate(reason, self.equity_state.equity)
         self.close_all_positions()
+        self._save_state()
         logger.critical(f"KILL SWITCH ACTIVATED: {reason}")
     
-    def reset_kill_switch(self, admin_override: bool = False) -> bool:
-        """Reset kill switch (requires admin override)."""
-        if not admin_override:
-            logger.warning("Kill switch reset requires admin override")
+    def reset_kill_switch(self, admin_key: str, expected_key: str) -> bool:
+        """Reset kill switch (requires admin key verification)."""
+        if not admin_key or admin_key != expected_key:
+            logger.warning("Kill switch reset failed: invalid or missing admin key")
             return False
         
         self.is_killed = False
+        self.killswitch.reset(admin_key, expected_key)
+        self._save_state()
         logger.info("Kill switch reset by admin")
         return True
     
@@ -402,18 +421,41 @@ class CapitalController:
         return sum(p.exposure for p in self.positions.values())
     
     def _get_price(self, symbol: str) -> float:
-        """Get current price for a symbol."""
+        """
+        Get current market price for a symbol with retries.
+        Raises RuntimeError if price cannot be fetched after retries.
+        Never returns a silent $1.00 fallback.
+        """
         if symbol in self.positions:
             return self.positions[symbol].entry_price
-        try:
-            import requests
-            url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-            response = requests.get(url, timeout=3)
-            if response.status_code == 200:
-                return float(response.json()['price'])
-        except Exception:
-            pass
-        return 1.0  # Last resort fallback only
+            
+        import time
+        import requests
+        
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+        max_retries = 3
+        last_err = None
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = requests.get(url, timeout=3)
+                if response.status_code == 200:
+                    data = response.json()
+                    price = float(data['price'])
+                    if price <= 0:
+                        raise ValueError(f"Invalid non-positive price received: {price}")
+                    return price
+                else:
+                    last_err = f"HTTP status {response.status_code}"
+            except Exception as e:
+                last_err = str(e)
+            
+            if attempt < max_retries:
+                time.sleep(0.3 * attempt)
+        
+        err_msg = f"Failed to fetch market price for {symbol} after {max_retries} retries: {last_err}"
+        logger.error(err_msg)
+        raise RuntimeError(err_msg)
     
     def _check_correlation(self, symbol: str) -> bool:
         """Check if new position would exceed correlation limits."""

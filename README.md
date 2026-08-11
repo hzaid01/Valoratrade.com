@@ -37,7 +37,7 @@
 
 ## Overview
 
-Valoratrade is a full-stack crypto trading signals platform that combines deep learning (PatchTST temporal embeddings), gradient boosting (XGBoost decision model), and 48 engineered technical features to generate LONG / SHORT / NO_TRADE signals for cryptocurrency pairs on Binance.
+Valoratrade is a full-stack crypto trading signals platform that combines gradient boosting (XGBoost decision model) and 37 engineered causal technical features to generate LONG / SHORT / NO_TRADE signals for cryptocurrency pairs on Binance.
 
 The system enforces a **strict 1-hour decision timeframe**, uses **triple-barrier labeling** for target generation, and runs a **champion/challenger model promotion pipeline** with forward-only evaluation—no lookahead bias, no data leakage.
 
@@ -48,8 +48,8 @@ The system enforces a **strict 1-hour decision timeframe**, uses **triple-barrie
 ## Features
 
 ### Trading Intelligence
-- **AI-Powered Signals** — PatchTST temporal embeddings + XGBoost multi-target predictions (prob_up, prob_down, expected_return, volatility)
-- **48 Causal Features** — Momentum, trend, volatility, volume, market structure, and price action indicators with no lookahead
+- **AI-Powered Signals** — XGBoost multi-target predictions (prob_up, prob_down, expected_return, volatility)
+- **37 Causal Features** — Momentum, trend, volatility, volume, market structure, and price action indicators with no lookahead
 - **Market Regime Detection** — Trending Up/Down, Ranging, High/Low Volatility classification with position sizing multipliers
 - **Triple Barrier Targets** — Take-profit, stop-loss, and time-based exit labels at multiple horizons (4, 8, 12, 24 candles)
 - **Dynamic Trade Levels** — ATR-based stop-loss and three take-profit targets with risk/reward ratios

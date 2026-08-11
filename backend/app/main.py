@@ -315,7 +315,7 @@ async def get_architecture():
         "success": True,
         "data": {
             "model_stack": {
-                "representation": "Engineered features (35 causal indicators)",
+                "representation": "Engineered features (37 causal indicators)",
                 "decision": "XGBoost (multi-target)",
                 "targets": ["prob_up", "prob_down", "expected_return", "volatility"]
             },

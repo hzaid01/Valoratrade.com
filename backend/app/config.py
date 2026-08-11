@@ -211,6 +211,16 @@ def validate_startup_config() -> List[str]:
     if not settings.encryption_secret:
         warnings.append("ENCRYPTION_SECRET not set — API key encryption will fail.")
 
+    # ── Admin Secret Key ──────────────────────────────────────────────
+    admin_secret = os.getenv("ADMIN_SECRET_KEY")
+    if not admin_secret:
+        if not settings.api.debug:
+            errors.append(
+                "ADMIN_SECRET_KEY MISSING: Set ADMIN_SECRET_KEY in environment to secure admin endpoints."
+            )
+        else:
+            warnings.append("ADMIN_SECRET_KEY not set in debug mode.")
+
     # ── Signal thresholds ─────────────────────────────────────────────
     if settings.signal.confidence_threshold < 0.5 or settings.signal.confidence_threshold > 0.99:
         warnings.append(
