@@ -8,7 +8,9 @@ __pycache__/
 venv/
 
 # Models and scalers (keep private)
-models/
+backend/model_registry/*.joblib
+backend/model_registry/*.pkl
+backend/runs/**/*.joblib
 *.pt
 *.pkl
 
