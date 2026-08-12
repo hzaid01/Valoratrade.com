@@ -78,7 +78,7 @@ def test_price_fetch_no_silent_fallback():
 
 def test_dynamic_salt_encryption():
     """PRIORITY 5: Verify unique salt per encryption and backward compatibility for legacy salt."""
-    raw_secret = "binance_secret_api_key_abc123"
+    raw_secret = "FAKE_TEST_VALUE_NOT_A_REAL_SECRET_000"
 
     enc1 = encrypt_value(raw_secret)
     enc2 = encrypt_value(raw_secret)
