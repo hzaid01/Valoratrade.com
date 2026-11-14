@@ -324,19 +324,20 @@ class DataStore:
         """Update system state based on data accumulation."""
         current = self.state_manager.get_state(symbol)
         
+        target = None
         if current.state == SystemState.NO_DATA and candle_count > 0:
-            self.state_manager.transition(
-                symbol=symbol,
-                new_state=SystemState.COLLECTING_DATA,
-                actor="data_store",
-                reason=f"First candles ingested: {candle_count}"
+            target = SystemState.COLLECTING_DATA
+            reason = f"First candles ingested: {candle_count}"
+        elif current.state == SystemState.COLLECTING_DATA and candle_count >= self.MIN_CANDLES_FOR_TRAINING:
+            target = SystemState.READY_FOR_TRAINING
+            reason = f"Sufficient data: {candle_count} >= {self.MIN_CANDLES_FOR_TRAINING}"
+
+        if target and not self.state_manager.transition(
+            symbol=symbol, new_state=target, actor="data_store", reason=reason
+        ):
+            # Another instance moved the symbol between our read and the
+            # transaction; ingestion itself succeeded, so just report it.
+            logger.warning(
+                f"[{symbol}] data_store transition to {target.value} rejected "
+                f"(state changed concurrently); will re-evaluate on next ingest"
             )
-        
-        elif current.state == SystemState.COLLECTING_DATA:
-            if candle_count >= self.MIN_CANDLES_FOR_TRAINING:
-                self.state_manager.transition(
-                    symbol=symbol,
-                    new_state=SystemState.READY_FOR_TRAINING,
-                    actor="data_store",
-                    reason=f"Sufficient data: {candle_count} >= {self.MIN_CANDLES_FOR_TRAINING}"
-                )
