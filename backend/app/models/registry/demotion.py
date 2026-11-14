@@ -42,11 +42,38 @@ class ModelDemotion:
     MAX_DRAWDOWN = 0.15
     CONSECUTIVE_FAILURE_LIMIT = 3
     
-    def __init__(self):
+    def __init__(self, registry: Optional[ModelRegistry] = None, state_manager=None):
         self.db = get_firestore()
-        self.registry = ModelRegistry()
-        self.state_manager = get_state_manager()
+        self.registry = registry or ModelRegistry()
+        self.state_manager = state_manager or get_state_manager()
         self._demotion_history: List[DemotionEvent] = []
+
+    def evaluate(self, symbol: str, forward_metrics: Dict) -> Optional[str]:
+        """
+        Pure check: the demotion reason if the champion should be demoted,
+        else None. Never changes anything. Missing metrics never count as
+        degradation (the old code read a missing "rolling_accuracy" as 0,
+        i.e. 100% degraded).
+        """
+        champion = self.registry.get_champion(symbol)
+        if not champion:
+            return None
+
+        benchmark_accuracy = champion.validation_metrics.get("accuracy", 0) or 0
+        current_accuracy = forward_metrics.get("rolling_accuracy")
+        if benchmark_accuracy > 0 and current_accuracy is not None:
+            degradation = (benchmark_accuracy - current_accuracy) / benchmark_accuracy
+            if degradation > self.ACCURACY_DEGRADATION_THRESHOLD:
+                return f"Accuracy degraded {degradation:.1%} below benchmark"
+
+        current_drawdown = forward_metrics.get("max_drawdown")
+        if current_drawdown is not None and current_drawdown > self.MAX_DRAWDOWN:
+            return f"Drawdown {current_drawdown:.1%} exceeds limit {self.MAX_DRAWDOWN:.1%}"
+
+        consecutive_failures = forward_metrics.get("consecutive_failures")
+        if consecutive_failures is not None and consecutive_failures >= self.CONSECUTIVE_FAILURE_LIMIT:
+            return f"{consecutive_failures} consecutive prediction failures"
+        return None
     
     def check_degradation(
         self,
@@ -58,49 +85,11 @@ class ModelDemotion:
         
         Returns DemotionEvent if demotion triggered, None otherwise.
         """
-        champion = self.registry.get_champion(symbol)
-        if not champion:
+        reason = self.evaluate(symbol, forward_metrics)
+        if reason is None:
             return None
-        
-        # Get benchmark (validation accuracy at training time)
-        benchmark_accuracy = champion.validation_metrics.get("accuracy", 0)
-        
-        # Get current rolling accuracy from forward metrics
-        current_accuracy = forward_metrics.get("rolling_accuracy", 0)
-        
-        # Check accuracy degradation
-        if benchmark_accuracy > 0:
-            degradation = (benchmark_accuracy - current_accuracy) / benchmark_accuracy
-            
-            if degradation > self.ACCURACY_DEGRADATION_THRESHOLD:
-                return self._trigger_demotion(
-                    champion.model_id,
-                    symbol,
-                    reason=f"Accuracy degraded {degradation:.1%} below benchmark",
-                    metrics=forward_metrics
-                )
-        
-        # Check drawdown
-        current_drawdown = forward_metrics.get("max_drawdown", 0)
-        if current_drawdown > self.MAX_DRAWDOWN:
-            return self._trigger_demotion(
-                champion.model_id,
-                symbol,
-                reason=f"Drawdown {current_drawdown:.1%} exceeds limit {self.MAX_DRAWDOWN:.1%}",
-                metrics=forward_metrics
-            )
-        
-        # Check consecutive failures
-        consecutive_failures = forward_metrics.get("consecutive_failures", 0)
-        if consecutive_failures >= self.CONSECUTIVE_FAILURE_LIMIT:
-            return self._trigger_demotion(
-                champion.model_id,
-                symbol,
-                reason=f"{consecutive_failures} consecutive prediction failures",
-                metrics=forward_metrics
-            )
-        
-        return None
+        champion = self.registry.get_champion(symbol)
+        return self._trigger_demotion(champion.model_id, symbol, reason=reason, metrics=forward_metrics)
     
     def _trigger_demotion(
         self,
