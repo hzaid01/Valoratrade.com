@@ -107,7 +107,8 @@ class ForwardEngine:
         entry_price: float,
         model_version: str,
         model_id: str = "",
-        position_size: Optional[float] = None
+        position_size: Optional[float] = None,
+        shadow: bool = False
     ) -> PredictionRecord:
         """
         Log a new prediction (LOCKED at this moment).
@@ -129,6 +130,7 @@ class ForwardEngine:
             "is_resolved": False,
             "outcome": None,
             "position_size": position_size,
+            "shadow": shadow,
             "created_at": timestamp 
         }
         
@@ -307,6 +309,8 @@ class ForwardEngine:
         history = []
         for doc in docs:
             d = doc.to_dict()
+            if d.get("shadow"):
+                continue  # challenger shadow predictions are internal only
             # Convert timestamp to ISO string for API response
             if isinstance(d.get('timestamp'), datetime):
                 d['timestamp'] = d['timestamp'].isoformat()

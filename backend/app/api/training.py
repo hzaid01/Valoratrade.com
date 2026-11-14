@@ -59,6 +59,35 @@ class IncrementalTrainingRequest(BaseModel):
     symbols: Optional[List[str]] = None
 
 
+def first_model_gate_mode() -> str:
+    """
+    FIRST_MODEL_GATE=log_only|enforce (default log_only).
+    log_only: first model is promoted even if the gates say pending/rejected
+    (historical behaviour; marked provisional). enforce: gates decide.
+    """
+    import os
+    raw = os.getenv("FIRST_MODEL_GATE", "log_only").strip().lower()
+    if raw not in ("log_only", "enforce"):
+        logger.warning(f"Unknown FIRST_MODEL_GATE={raw!r}; using log_only")
+        return "log_only"
+    return raw
+
+
+def _cache_champion_model(symbol: str, xgboost_path: str) -> None:
+    """
+    Put the newly promoted champion in the in-memory cache used by signals.
+    Previously only the first model was cached, so a later promotion kept
+    serving the OLD cached model under the new champion's version. On load
+    failure the old cache entry is kept (signals keep flowing) and logged.
+    """
+    try:
+        from app.models.model_cache import cache_model
+        from app.models.xgboost_model import XGBoostDecisionModel
+        cache_model(symbol, XGBoostDecisionModel.load(xgboost_path))
+    except Exception as cache_err:
+        logger.error(f"[{symbol}] Model cache refresh failed, previous model stays cached: {cache_err}")
+
+
 def _checked_transition(state_manager, symbol, new_state, actor, reason, metadata=None) -> bool:
     """
     End-of-run state transition whose failure cannot be undone (the model is
@@ -313,39 +342,49 @@ async def run_training_job(symbols: List[str], force: bool = False):
                     validation_metrics=training_result.validation_metrics
                 )
 
-                # Champion/Challenger evaluation
+                # Champion/Challenger evaluation. The first model goes through
+                # the same gates (promote=False), then FIRST_MODEL_GATE decides.
                 current_champion = registry.get_champion(symbol)
                 is_first_model = current_champion is None
 
+                promotion_result = champion_challenger.evaluate_challenger(
+                    challenger_id=model_metadata.model_id,
+                    baseline_results=baseline_results,
+                    multi_window_validated=False,
+                    promote=not is_first_model
+                )
+                verdict = promotion_result.status.value
+                logger.info(f"[{symbol}] Champion/Challenger result: {verdict}")
+
                 if is_first_model:
-                    # AUTO-PROMOTE first model — no champion exists yet
-                    logger.info(
-                        f"[{symbol}] AUTO-PROMOTING first model to champion: "
-                        f"{model_metadata.model_id}"
-                    )
-                    registry.promote_to_champion(model_metadata.model_id)
-                    promoted = True
-                    
-                    # Cache model in memory for signal endpoint
-                    try:
-                        from app.models.model_cache import cache_model
-                        from app.models.xgboost_model import XGBoostDecisionModel
-                        cached = XGBoostDecisionModel.load(str(training_run.get_model_paths()["xgboost"]))
-                        cache_model(symbol, cached)
-                    except Exception as cache_err:
-                        logger.warning(f"[{symbol}] Model cache failed: {cache_err}")
+                    if verdict == "promoted":
+                        promoted = registry.promote_to_champion(
+                            model_metadata.model_id, actor="training_api",
+                            reason="first model passed promotion gates"
+                        )
+                    elif first_model_gate_mode() == "enforce":
+                        promoted = False
+                        logger.warning(
+                            f"[{symbol}] FIRST_MODEL_GATE enforce: first model not promoted ({verdict})"
+                        )
+                    else:
+                        # log_only (default): keep the historical behaviour of
+                        # auto-promoting, so a symbol is never left without
+                        # signals, but mark it provisional.
+                        logger.warning(
+                            f"[{symbol}] FIRST_MODEL_GATE log_only: promoting first model "
+                            f"{model_metadata.model_id} despite gate result {verdict} (provisional)"
+                        )
+                        promoted = registry.promote_to_champion(
+                            model_metadata.model_id, actor="training_api",
+                            reason=f"first model auto-promoted (gate: {verdict})",
+                            provisional=True
+                        )
                 else:
-                    # Run champion/challenger gate
-                    promotion_result = champion_challenger.evaluate_challenger(
-                        challenger_id=model_metadata.model_id,
-                        baseline_results=baseline_results,
-                        multi_window_validated=False
-                    )
-                    promoted = promotion_result.status.value == "promoted"
-                    logger.info(
-                        f"[{symbol}] Champion/Challenger result: "
-                        f"{promotion_result.status.value}"
-                    )
+                    promoted = verdict == "promoted"
+
+                if promoted:
+                    _cache_champion_model(symbol, str(training_run.get_model_paths()["xgboost"]))
 
                 # Update system state based on promotion
                 if promoted:
@@ -643,3 +682,43 @@ async def get_system_states(symbols: Optional[List[str]] = None):
         "success": True,
         "data": states
     }
+
+
+@router.post("/forward-cycle")
+async def forward_cycle(symbols: Optional[List[str]] = None):
+    """
+    Resolve matured predictions, refresh forward metrics and re-evaluate
+    PENDING challengers. Intended for Cloud Scheduler (hourly).
+    """
+    from app.evaluation.forward_cycle import run_forward_cycle
+    from app.evaluation.forward_engine import ForwardEngine
+    from app.evaluation.baselines import BaselineStrategies
+    from app.models.registry.model_registry import ModelRegistry
+    from app.models.registry.champion_challenger import ChampionChallenger
+
+    symbols = symbols or ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    lock_manager = get_lock_manager()
+    # Hourly and idempotent: failures are logged/counted but must never lock
+    # the cycle out permanently, so the retry limit is not applied.
+    acquired = lock_manager.try_acquire("ALL", "forward_cycle", "api", ignore_retry_limit=True)
+    if not acquired.lock:
+        return {"success": False, "message": f"Forward cycle skipped: {acquired.denial.value}"}
+
+    outcome = JobOutcome.FAILED
+    try:
+        registry = ModelRegistry()
+        summary = run_forward_cycle(
+            symbols=symbols,
+            forward_engine=ForwardEngine(),
+            registry=registry,
+            champion_challenger=ChampionChallenger(registry, BaselineStrategies()),
+            state_manager=get_state_manager(),
+            on_promoted=lambda sym, m: _cache_champion_model(sym, m.xgboost_path),
+        )
+        outcome = JobOutcome.SUCCESS
+        return {"success": True, "data": summary}
+    except Exception as e:
+        logger.error(f"Forward cycle FAILED: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Forward cycle failed: {e}")
+    finally:
+        lock_manager.release(acquired.lock, outcome)

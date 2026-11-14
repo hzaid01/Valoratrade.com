@@ -53,6 +53,9 @@ class RetrainRequest(BaseModel):
 class PromoteRequest(BaseModel):
     """Model promotion request."""
     model_id: str
+    # Required to promote a RETIRED or REJECTED model. Logged and audited.
+    override: bool = False
+    reason: Optional[str] = None
 
 
 class KillSwitchRequest(BaseModel):
@@ -139,7 +142,12 @@ async def promote_model(request: PromoteRequest):
         # This would normally include baseline comparison
         # For now, direct promotion
         sys = get_admin_components()
-        success = sys.model_registry.promote_to_champion(request.model_id)
+        success = sys.model_registry.promote_to_champion(
+            request.model_id,
+            override=request.override,
+            actor="admin_api",
+            reason=request.reason or "admin promotion"
+        )
         
         if not success:
             raise HTTPException(status_code=400, detail="Promotion failed")

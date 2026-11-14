@@ -99,7 +99,8 @@ class ChampionChallenger:
         self,
         challenger_id: str,
         baseline_results: Dict[str, BaselineResult],
-        multi_window_validated: bool = False
+        multi_window_validated: bool = False,
+        promote: bool = True
     ) -> PromotionResult:
         """
         Evaluate a challenger for promotion.
@@ -109,6 +110,8 @@ class ChampionChallenger:
             baseline_results: Results from running baselines
             multi_window_validated: True if model passed multi-window validation
                                    (REQUIRED for first model promotion)
+            promote: if False, a PROMOTED verdict is returned but not applied
+                     (caller decides, e.g. the first-model gate)
             
         Returns:
             PromotionResult with decision
@@ -120,7 +123,7 @@ class ChampionChallenger:
         # Validate metrics are not NaN/Inf
         valid, metric_errors = self._validate_metrics(challenger.validation_metrics)
         if not valid:
-            return PromotionResult(
+            result = PromotionResult(
                 challenger_id=challenger_id,
                 champion_id=None,
                 status=PromotionStatus.REJECTED_BASELINES,  # Using this for invalid metrics
@@ -128,6 +131,8 @@ class ChampionChallenger:
                 metrics_comparison={"errors": metric_errors},
                 timestamp=datetime.utcnow()
             )
+            self.registry.record_evaluation(challenger_id, result.status.value)
+            return result
         
         champion = self.registry.get_champion(challenger.symbol)
         
@@ -187,14 +192,51 @@ class ChampionChallenger:
         
         self._promotions.append(result)
         
+        baseline_summary = {
+            name: r.metrics.get("sharpe_ratio", 0) for name, r in baseline_results.items()
+        }
+
         # Execute promotion if approved
-        if status == PromotionStatus.PROMOTED:
-            self.registry.promote_to_champion(challenger_id)
-            logger.info(f"Promoted {challenger_id} to champion")
+        if status == PromotionStatus.PROMOTED and promote:
+            if self.registry.promote_to_champion(
+                challenger_id, actor="champion_challenger", reason="passed promotion gates"
+            ):
+                logger.info(f"Promoted {challenger_id} to champion")
+            else:
+                logger.error(f"Promotion of {challenger_id} refused by registry")
+            self.registry.record_evaluation(challenger_id, status.value, baseline_summary)
         else:
-            logger.info(f"Challenger {challenger_id} rejected: {status.value}")
+            self.registry.record_evaluation(challenger_id, status.value, baseline_summary)
+            logger.info(f"Challenger {challenger_id} not promoted: {status.value}")
         
         return result
+
+    def reevaluate_pending(self, symbol: Optional[str] = None) -> List[PromotionResult]:
+        """
+        Re-run the promotion gates for PENDING challengers that now have
+        forward metrics. Uses the baseline Sharpe ratios stored on the model
+        at evaluation time (local run artifacts do not survive Cloud Run).
+        """
+        from types import SimpleNamespace
+        from app.models.registry.model_registry import ModelStatus
+
+        results = []
+        for m in self.registry.list_models(symbol=symbol, status=ModelStatus.PENDING):
+            if not m.forward_metrics:
+                continue
+            if not m.baseline_summary:
+                logger.warning(f"Cannot re-evaluate {m.model_id}: no stored baseline summary")
+                continue
+            baselines = {
+                name: SimpleNamespace(metrics={"sharpe_ratio": sharpe})
+                for name, sharpe in m.baseline_summary.items()
+            }
+            results.append(self.evaluate_challenger(
+                challenger_id=m.model_id,
+                baseline_results=baselines,
+                multi_window_validated=False
+            ))
+        return results
     
     def check_for_degradation(
         self,
@@ -315,6 +357,13 @@ class ChampionChallenger:
             if checks.get("multi_window_validated"):
                 logger.info("First model promotion: passed baselines + drawdown + multi-window")
                 return PromotionStatus.PROMOTED
+            # A completed forward test is accepted in place of multi-window
+            # validation, so a PENDING first model can be promoted on re-evaluation.
+            if checks.get("forward_consistent") is True:
+                logger.info("First model promotion: passed baselines + drawdown + forward test")
+                return PromotionStatus.PROMOTED
+            if checks.get("forward_consistent") is False:
+                return PromotionStatus.REJECTED_FORWARD
             else:
                 # First model without multi-window validation stays pending
                 logger.info("First model awaiting multi-window validation")
