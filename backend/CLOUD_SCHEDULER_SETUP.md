@@ -18,7 +18,7 @@
 #      --schedule="*/15 * * * *" \
 #      --uri="https://trading-api-kgibudh5wq-el.a.run.app/api/training/trigger" \
 #      --http-method=POST \
-#      --headers="Content-Type=application/json" \
+#      --headers="Content-Type=application/json,X-Admin-Key=YOUR_ADMIN_SECRET_KEY" \
 #      --message-body='{"symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"], "force": false}' \
 #      --oidc-service-account-email=YOUR_SERVICE_ACCOUNT@PROJECT.iam.gserviceaccount.com \
 #      --oidc-token-audience="https://trading-api-kgibudh5wq-el.a.run.app"
@@ -73,3 +73,23 @@
 #      --uri="https://europe-west1-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/PROJECT/jobs/training-job:run" \
 #      --http-method=POST \
 #      --oauth-service-account-email=YOUR_SERVICE_ACCOUNT@PROJECT.iam.gserviceaccount.com
+
+# ============================================================
+# AUTH + FORWARD CYCLE (added with the state-machine fixes)
+# ============================================================
+#
+# Scheduler/operator endpoints accept the admin key in header X-Admin-Key
+# (value = ADMIN_SECRET_KEY). ADMIN_AUTH=log_only (default) still lets
+# header-less calls through and logs "ADMIN_AUTH log_only: WOULD HAVE
+# REJECTED". Add the header to every job below, confirm the warning is
+# gone, then set ADMIN_AUTH=enforce.
+# Always require the key regardless of ADMIN_AUTH: force=true training,
+# POST /api/admin/promote, POST /api/admin/retrain.
+#
+# Hourly forward cycle (resolves predictions, re-evaluates challengers):
+#    gcloud scheduler jobs create http forward-cycle-hourly \
+#      --location=europe-west1 \
+#      --schedule="7 * * * *" \
+#      --uri="https://trading-api-kgibudh5wq-el.a.run.app/api/training/forward-cycle" \
+#      --http-method=POST \
+#      --headers="X-Admin-Key=YOUR_ADMIN_SECRET_KEY"

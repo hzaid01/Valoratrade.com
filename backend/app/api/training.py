@@ -19,7 +19,8 @@ Changes from v1:
 import logging
 import asyncio
 from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Header
+from app.core.admin_auth import scheduler_auth_dependency, require_admin_key
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
 
@@ -503,7 +504,9 @@ async def check_training_preconditions(symbols: List[str]) -> Tuple[bool, str]:
 @router.post("/trigger")
 async def trigger_training(
     request: TrainingRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    x_admin_key: Optional[str] = Header(None),
+    _auth: None = Depends(scheduler_auth_dependency)
 ):
     """
     Trigger model training with precondition checks.
@@ -513,6 +516,11 @@ async def trigger_training(
 
     Use force=True to bypass cooldown and state checks.
     """
+    # force bypasses cooldown, state checks and the retry limit: always
+    # requires the admin key, whatever ADMIN_AUTH says.
+    if request.force:
+        require_admin_key(x_admin_key, "force training")
+
     symbols = request.symbols or ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
     # Skip precondition check if force=True
@@ -556,7 +564,11 @@ async def get_training_status():
 
 
 @router.post("/run-sync")
-async def run_training_sync(request: TrainingRequest):
+async def run_training_sync(
+    request: TrainingRequest,
+    x_admin_key: Optional[str] = Header(None),
+    _auth: None = Depends(scheduler_auth_dependency)
+):
     """
     Run training synchronously (for Cloud Run Jobs).
 
@@ -564,6 +576,9 @@ async def run_training_sync(request: TrainingRequest):
     """
     if _training_status["is_running"]:
         raise HTTPException(status_code=409, detail="Training already in progress")
+
+    if request.force:
+        require_admin_key(x_admin_key, "force training")
 
     symbols = request.symbols or ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
@@ -578,7 +593,10 @@ async def run_training_sync(request: TrainingRequest):
 
 
 @router.post("/ingest-data")
-async def ingest_data(symbols: Optional[List[str]] = None):
+async def ingest_data(
+    symbols: Optional[List[str]] = None,
+    _auth: None = Depends(scheduler_auth_dependency)
+):
     """
     Ingest latest candles from Binance.
 
@@ -694,7 +712,10 @@ async def get_system_states(symbols: Optional[List[str]] = None):
 
 
 @router.post("/forward-cycle")
-async def forward_cycle(symbols: Optional[List[str]] = None):
+async def forward_cycle(
+    symbols: Optional[List[str]] = None,
+    _auth: None = Depends(scheduler_auth_dependency)
+):
     """
     Resolve matured predictions, refresh forward metrics and re-evaluate
     PENDING challengers. Intended for Cloud Scheduler (hourly).

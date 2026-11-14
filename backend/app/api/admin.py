@@ -4,7 +4,7 @@ Admin API
 Endpoints for model management, training, and system administration.
 """
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 
@@ -13,6 +13,7 @@ from app.models.registry.champion_challenger import ChampionChallenger
 from app.evaluation.baselines import BaselineStrategies
 from app.capital.controller import CapitalController, get_capital_controller
 from app.capital.killswitch import KillSwitch
+from app.core.admin_auth import admin_key_dependency
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -136,7 +137,7 @@ async def get_champion(symbol: str):
 
 
 @router.post("/promote")
-async def promote_model(request: PromoteRequest):
+async def promote_model(request: PromoteRequest, _auth: None = Depends(admin_key_dependency)):
     """Promote a model to champion (with gates)."""
     try:
         # This would normally include baseline comparison
@@ -165,7 +166,7 @@ async def promote_model(request: PromoteRequest):
 
 
 @router.post("/retrain")
-async def trigger_retrain(request: RetrainRequest):
+async def trigger_retrain(request: RetrainRequest, _auth: None = Depends(admin_key_dependency)):
     """Trigger model retraining."""
     try:
         symbol = request.symbol.upper()
