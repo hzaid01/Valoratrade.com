@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Tuple
 
 from app.core.system_state import get_state_manager, SystemState
-from app.core.job_lock import get_lock_manager
+from app.core.job_lock import get_lock_manager, JobOutcome, LockDenial
 from app.core.data_store import DataStore, InsufficientDataError
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,21 @@ class TrainingRequest(BaseModel):
 class IncrementalTrainingRequest(BaseModel):
     """Incremental training for continuous learning."""
     symbols: Optional[List[str]] = None
+
+
+def _job_outcome(status: Optional[str]) -> JobOutcome:
+    """
+    Map a per-symbol training result status to a lock outcome.
+
+    Only real failures count against the retry limit. "skipped" (invalid
+    state, insufficient data, ...) is not a failure. A missing status means
+    the job died before recording a result, which is treated as a failure.
+    """
+    if status == "completed":
+        return JobOutcome.SUCCESS
+    if status == "skipped":
+        return JobOutcome.SKIPPED
+    return JobOutcome.FAILED
 
 
 async def run_training_job(symbols: List[str], force: bool = False):
@@ -106,10 +121,15 @@ async def run_training_job(symbols: List[str], force: bool = False):
             lock = None
             try:
                 # Acquire job lock
-                lock = lock_manager.acquire(symbol, "training", "api")
+                # force=True may bypass an exhausted retry count, never a live lock.
+                acquired = lock_manager.try_acquire(
+                    symbol, "training", "api", ignore_retry_limit=force
+                )
+                lock = acquired.lock
                 if not lock:
-                    logger.warning(f"[{symbol}] Training skipped: locked by another job")
-                    results[symbol] = {"status": "skipped", "reason": "locked_by_another_job"}
+                    denial = acquired.denial or LockDenial.HELD
+                    logger.warning(f"[{symbol}] Training skipped: {denial.value}")
+                    results[symbol] = {"status": "skipped", "reason": denial.value}
                     continue
 
                 # Check system state (bypass if force=True)
@@ -185,7 +205,10 @@ async def run_training_job(symbols: List[str], force: bool = False):
                 training_run.seal_manifest()
 
                 # Update heartbeat
-                lock_manager.heartbeat(lock)
+                if not lock_manager.heartbeat(lock):
+                    # Our lock went stale and another job took it over; stop
+                    # rather than train concurrently with the new owner.
+                    raise RuntimeError("Job lock lost (taken over by another job)")
                 _training_status["heartbeat"] = datetime.utcnow().isoformat()
 
                 # Compute features
@@ -343,8 +366,7 @@ async def run_training_job(symbols: List[str], force: bool = False):
             finally:
                 if lock:
                     lock_manager.release(
-                        lock,
-                        success=results.get(symbol, {}).get("status") == "completed"
+                        lock, _job_outcome(results.get(symbol, {}).get("status"))
                     )
 
         _training_status["last_result"] = results
