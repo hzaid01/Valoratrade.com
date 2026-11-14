@@ -93,3 +93,24 @@ def test_unknown_admin_auth_value_is_log_only(client, monkeypatch):
 
 def test_read_endpoints_stay_open(client):
     assert client.get("/api/training/status").status_code == 200
+
+
+def test_admin_retrain_actually_runs_training(client, monkeypatch):
+    import app.api.training as training
+    calls = []
+
+    async def fake_job(symbols, force=False):
+        calls.append((symbols, force))
+        return {}
+
+    monkeypatch.setattr(training, "run_training_job", fake_job)
+    r = client.post("/api/admin/retrain", json={"symbol": "eth"}, headers=H)
+    assert r.status_code == 200 and r.json()["data"]["status"] == "queued"
+    assert calls == [(["ETHUSDT"], False)]  # old endpoint returned "queued" and did nothing
+
+
+def test_admin_retrain_skips_when_running(client, monkeypatch):
+    import app.api.training as training
+    monkeypatch.setitem(training._training_status, "is_running", True)
+    r = client.post("/api/admin/retrain", json={"symbol": "BTC"}, headers=H)
+    assert r.json()["success"] is False and r.json()["data"]["status"] == "skipped"

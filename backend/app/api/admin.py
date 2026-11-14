@@ -4,7 +4,7 @@ Admin API
 Endpoints for model management, training, and system administration.
 """
 import logging
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 
@@ -166,15 +166,37 @@ async def promote_model(request: PromoteRequest, _auth: None = Depends(admin_key
 
 
 @router.post("/retrain")
-async def trigger_retrain(request: RetrainRequest, _auth: None = Depends(admin_key_dependency)):
-    """Trigger model retraining."""
+async def trigger_retrain(
+    request: RetrainRequest,
+    background_tasks: BackgroundTasks,
+    _auth: None = Depends(admin_key_dependency)
+):
+    """
+    Queue model retraining for one symbol.
+
+    Previously this returned "queued" and did nothing. It now runs the same
+    job as POST /api/training/trigger (job lock, state machine, gates) in the
+    background. force=true bypasses state checks like the training API.
+    """
     try:
+        from app.api import training
+
         symbol = request.symbol.upper()
         if not symbol.endswith("USDT"):
             symbol = f"{symbol}USDT"
-        
-        # In production, this would queue a training job
-        # For now, return acknowledgment
+
+        if training._training_status["is_running"]:
+            return {
+                "success": False,
+                "data": {
+                    "symbol": symbol,
+                    "status": "skipped",
+                    "message": "Training already in progress"
+                }
+            }
+
+        background_tasks.add_task(training.run_training_job, [symbol], request.force)
+        logger.info(f"Retrain queued via admin API for {symbol} (force={request.force})")
         return {
             "success": True,
             "data": {
@@ -183,7 +205,7 @@ async def trigger_retrain(request: RetrainRequest, _auth: None = Depends(admin_k
                 "message": "Retraining job queued"
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Error triggering retrain: {e}")
         raise HTTPException(status_code=500, detail="Failed to queue retrain")
