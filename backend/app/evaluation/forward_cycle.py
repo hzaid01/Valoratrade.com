@@ -30,6 +30,15 @@ def min_forward_samples() -> int:
         return 20
 
 
+def demotion_mode() -> str:
+    """DEMOTION_MODE=log_only|enforce (default log_only)."""
+    raw = os.getenv("DEMOTION_MODE", "log_only").strip().lower()
+    if raw not in ("log_only", "enforce"):
+        logger.warning(f"Unknown DEMOTION_MODE={raw!r}; using log_only")
+        return "log_only"
+    return raw
+
+
 def fetch_binance_close_at(symbol: str, when: datetime) -> Optional[float]:
     """
     Close of the 1h Binance candle containing ``when`` (the prediction's
@@ -110,6 +119,7 @@ def run_forward_cycle(
 
     # 2. Forward metrics for pending challengers and champions
     need = min_forward_samples()
+    champion_metrics: Dict[str, Dict] = {}
     for m in registry.list_models():
         if m.symbol not in symbols:
             continue
@@ -117,8 +127,41 @@ def run_forward_cycle(
             continue
         fm = forward_engine.get_forward_metrics(model_version=m.version, days=FORWARD_WINDOW_DAYS)
         if fm.resolved_predictions >= need:
-            registry.update_forward_metrics(m.model_id, fm.to_dict())
+            fm_dict = fm.to_dict()
+            registry.update_forward_metrics(m.model_id, fm_dict)
             summary["forward_metrics_updated"].append(m.model_id)
+            if m.status == ModelStatus.CHAMPION.value:
+                champion_metrics[m.symbol] = fm_dict
+
+    # 2b. Demotion of degraded champions (DEMOTION_MODE, default log_only)
+    summary["demotions"] = []
+    if champion_metrics:
+        from app.models.registry.demotion import ModelDemotion
+        demotion = ModelDemotion(registry=registry, state_manager=state_manager)
+        mode = demotion_mode()
+        for symbol, fm_dict in champion_metrics.items():
+            # Map forward-engine metrics onto the demotion inputs. Only
+            # accuracy is measured forward today; drawdown/streak are not.
+            reason = demotion.evaluate(symbol, {"rolling_accuracy": fm_dict.get("accuracy")})
+            if not reason:
+                continue
+            champion = registry.get_champion(symbol)
+            if mode != "enforce":
+                logger.warning(
+                    f"DEMOTION_MODE log_only: WOULD HAVE DEMOTED {champion.model_id}: {reason}"
+                )
+                summary["demotions"].append({"model_id": champion.model_id, "reason": reason, "applied": False})
+                continue
+            event = demotion._trigger_demotion(champion.model_id, symbol, reason, fm_dict)
+            summary["demotions"].append({
+                "model_id": champion.model_id, "reason": reason, "applied": True,
+                "rolled_back_to": event.rolled_back_to,
+            })
+            if event.rolled_back_to and on_promoted:
+                try:
+                    on_promoted(symbol, registry.get(event.rolled_back_to))
+                except Exception as e:
+                    logger.error(f"[forward-cycle] on_promoted after rollback failed: {e}")
 
     # 3. Re-evaluate pending challengers
     for symbol in symbols:
