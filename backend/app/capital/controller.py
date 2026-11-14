@@ -14,7 +14,11 @@ from typing import Dict, List, Optional, Tuple
 from app.firebase_config import get_firestore
 
 from app.config import get_settings, CapitalConfig
-from app.capital.killswitch import KillSwitch
+from app.capital.killswitch import (
+    KillSwitch, KillReason, KillSwitchState, KillSwitchEvent,
+    IllegalKillSwitchTransition, next_trading_mode, killswitch_auto_mode,
+)
+from app.core.fs_tx import run_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -33,22 +37,6 @@ class RejectionReason(Enum):
     REGIME_FILTER = "regime_not_tradeable"
     SYSTEM_STATE = "system_state_not_tradeable"
     MODEL_DEGRADED = "model_degraded"
-
-
-class KillSwitchState(Enum):
-    """
-    Kill switch states with override hierarchy.
-    
-    Hierarchy (each can override those below):
-    1. KILLED (no trading, no signals)
-    2. BASELINE_ONLY (only baseline strategy signals)
-    3. THROTTLED (reduced position sizes)
-    4. ACTIVE (normal trading)
-    """
-    ACTIVE = "active"
-    THROTTLED = "throttled"
-    BASELINE_ONLY = "baseline_only"
-    KILLED = "killed"
 
 
 @dataclass
@@ -118,7 +106,7 @@ class CapitalController:
     
     def __init__(self, config: Optional[CapitalConfig] = None):
         self.config = config or get_settings().capital
-        
+
         # State
         self.positions: Dict[str, Position] = {}
         self.equity_state = EquityState(
@@ -127,32 +115,139 @@ class CapitalController:
             drawdown=0.0,
             drawdown_pct=0.0
         )
-        
-        # Control flags and integrated KillSwitch module
-        self.killswitch = KillSwitch()
-        self.is_killed = False
-        self.is_forced_flat = False
+
+        # Trading mode: Firestore field trading_mode is the source of truth.
+        # _mode is only the last value read, used if a read fails.
+        self._mode: KillSwitchState = KillSwitchState.ACTIVE
+        self.killswitch = KillSwitch(mode_provider=self.get_mode)
         self.no_trade_zones: List[Tuple[datetime, datetime]] = []
 
         # Firestore
         self.db = get_firestore()
         self.doc_ref = self.db.collection('system_state').document('capital_controller')
-        
-        # Load state
-        self._load_state()
-        
-        # Metrics
+
+        # Daily counters (reset when the UTC date changes, see _roll_day)
         self.trades_today = 0
         self.rejections_today = 0
         self.last_reset = datetime.utcnow()
-        
+
+        # Load state
+        self._load_state()
+        self.killswitch.start_new_day(self.equity_state.equity)
+
         # History
-        if not hasattr(self, 'equity_history'):
-             self.equity_history = []
-             self._record_equity(self.equity_state.equity)
-        
+        self.equity_history: List[Dict] = []
+        self._record_equity(self.equity_state.equity)
+
+    # ── trading mode (single source of truth) ──────────────────────────
+
+    @staticmethod
+    def _mode_from_doc(data: Optional[Dict], fallback: KillSwitchState) -> KillSwitchState:
+        """Read trading_mode; migrate legacy is_killed/is_forced_flat docs once."""
+        if not data:
+            return KillSwitchState.ACTIVE
+        if "trading_mode" in data:
+            try:
+                return KillSwitchState(data["trading_mode"])
+            except ValueError:
+                logger.error(f"Unknown trading_mode {data['trading_mode']!r}; keeping last known {fallback.value}")
+                return fallback
+        # Legacy doc (pre-state-machine): kill wins over forced-flat.
+        if data.get("is_killed"):
+            return KillSwitchState.KILLED
+        if data.get("is_forced_flat"):
+            return KillSwitchState.FORCED_FLAT
+        return KillSwitchState.ACTIVE
+
+    def get_mode(self) -> KillSwitchState:
+        """
+        Current trading mode, read from Firestore on every call so a kill
+        issued on any instance (or the admin API's controller) is seen here.
+        On read failure, the last known mode is used (logged).
+        """
+        try:
+            doc = self.doc_ref.get()
+            self._mode = self._mode_from_doc(doc.to_dict() if doc.exists else None, self._mode)
+        except Exception as e:
+            logger.error(f"Trading mode read failed, using last known {self._mode.value}: {e}")
+        return self._mode
+
+    @property
+    def is_killed(self) -> bool:
+        """Read-only view of the trading mode (kept for API compatibility)."""
+        return self.get_mode() == KillSwitchState.KILLED
+
+    @property
+    def is_forced_flat(self) -> bool:
+        """Read-only view of the trading mode (kept for API compatibility)."""
+        return self.get_mode() == KillSwitchState.FORCED_FLAT
+
+    def is_kill_active(self) -> bool:
+        """True if trading is halted by the kill switch."""
+        return self.get_mode() == KillSwitchState.KILLED
+
+    def apply_mode_event(self, event: KillSwitchEvent, actor: str, reason: str = "") -> KillSwitchState:
+        """
+        The ONLY way the trading mode changes. Read-check-write in one
+        Firestore transaction. Idempotent for duplicate events (no write).
+        Raises IllegalKillSwitchTransition for pairs not in the table.
+        """
+        def _tx(transaction):
+            snap = self.doc_ref.get(transaction=transaction)
+            data = snap.to_dict() if snap.exists else {}
+            current = self._mode_from_doc(data, self._mode)
+            resume = None
+            if data.get("resume_mode"):
+                try:
+                    resume = KillSwitchState(data["resume_mode"])
+                except ValueError:
+                    resume = None
+            new = next_trading_mode(current, event, resume)
+            if new == current and "trading_mode" in data:
+                return current, new, False
+            now = datetime.utcnow()
+            update = {
+                "trading_mode": new.value,
+                "mode_updated_at": now.isoformat(),
+                "mode_updated_by": actor,
+                "mode_reason": reason,
+                # Read-only mirrors for old readers; never read back as state.
+                "is_killed": new == KillSwitchState.KILLED,
+                "is_forced_flat": new == KillSwitchState.FORCED_FLAT,
+            }
+            if event == KillSwitchEvent.KILL and current != KillSwitchState.KILLED:
+                update["resume_mode"] = current.value
+            if event == KillSwitchEvent.RESET and current == KillSwitchState.KILLED:
+                update["resume_mode"] = None
+            transaction.set(self.doc_ref, update, merge=True)
+            transaction.set(self.db.collection("capital_mode_transitions").document(), {
+                "from_mode": current.value, "to_mode": new.value, "event": event.value,
+                "actor": actor, "reason": reason, "timestamp": now.isoformat(),
+            })
+            return current, new, True
+
+        try:
+            current, new, changed = run_transaction(self.db, _tx)
+        except IllegalKillSwitchTransition as e:
+            logger.error(f"Illegal trading-mode transition by {actor}: {e}")
+            raise
+
+        self._mode = new
+        if not changed:
+            logger.info(f"Trading mode {event.value} by {actor}: already {new.value} (no-op)")
+            return new
+
+        logger.warning(f"Trading mode {current.value} -> {new.value} ({event.value}) by {actor}: {reason}")
+        if new in (KillSwitchState.KILLED, KillSwitchState.FORCED_FLAT):
+            self.close_all_positions()
+        if event == KillSwitchEvent.RESET:
+            self.killswitch.on_reset()
+        return new
+
+    # ── persistence (equity only; never the mode) ──────────────────────
+
     def _load_state(self):
-        """Load state from Firestore."""
+        """Load equity from Firestore; the mode is always read live."""
         try:
             doc = self.doc_ref.get()
             if doc.exists:
@@ -161,30 +256,29 @@ class CapitalController:
                 self.equity_state.peak_equity = data.get('peak_equity', 100000.0)
                 self.equity_state.drawdown = data.get('drawdown', 0.0)
                 self.equity_state.drawdown_pct = data.get('drawdown_pct', 0.0)
-                self.is_killed = data.get('is_killed', False)
-                if self.is_killed:
-                    self.killswitch.is_active = True
-                self.is_forced_flat = data.get('is_forced_flat', False)
+                self._mode = self._mode_from_doc(data, self._mode)
                 logger.info("Capital controller state loaded from Firestore")
         except Exception as e:
             logger.error(f"Failed to load state: {e}")
 
     def _save_state(self):
-        """Save state to Firestore."""
+        """
+        Save equity fields only. The trading mode is written exclusively by
+        apply_mode_event (previously this wrote is_killed from memory, so an
+        instance recording equity could un-kill another instance's kill).
+        """
         try:
             state = {
                 "equity": self.equity_state.equity,
                 "peak_equity": self.equity_state.peak_equity,
                 "drawdown": self.equity_state.drawdown,
                 "drawdown_pct": self.equity_state.drawdown_pct,
-                "is_killed": self.is_killed or self.killswitch.is_active,
-                "is_forced_flat": self.is_forced_flat,
                 "last_update": datetime.utcnow()
             }
             self.doc_ref.set(state, merge=True)
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
-            
+
     def get_history(self, limit: int = 100) -> List[Dict]:
         """Get equity history."""
         return self.equity_history[-limit:]
@@ -197,10 +291,21 @@ class CapitalController:
             "drawdown_pct": self.equity_state.drawdown_pct
         })
         self._save_state()
-    
-    def is_kill_active(self) -> bool:
-        """True if trading is halted by the kill switch."""
-        return bool(self.is_killed or self.killswitch.is_active)
+
+    def _roll_day(self) -> None:
+        """Reset daily counters when the UTC date changes since last_reset."""
+        now = datetime.utcnow()
+        if now.date() != self.last_reset.date():
+            logger.info(
+                f"New trading day: resetting trades_today={self.trades_today}, "
+                f"rejections_today={self.rejections_today}"
+            )
+            self.trades_today = 0
+            self.rejections_today = 0
+            self.last_reset = now
+            self.killswitch.start_new_day(self.equity_state.equity)
+
+    # ── trade approval ─────────────────────────────────────────────────
 
     def can_trade(
         self,
@@ -212,35 +317,48 @@ class CapitalController:
     ) -> TradeApproval:
         """
         Check if a trade is allowed.
-        
+
         This is the FINAL GATE before execution.
-        
+
         Args:
             symbol: Trading pair
             direction: 'long' or 'short'
             confidence: Model confidence 0-1
             proposed_size: Proposed position size in base currency
             regime_tradeable: Whether current regime allows trading
-            
+
         Returns:
             TradeApproval with decision and adjusted size
         """
-        # Check kill switch first (either controller flag or KillSwitch module)
-        if self.is_killed or self.killswitch.is_active:
+        self._roll_day()
+        approval = self._evaluate_trade(symbol, direction, confidence, proposed_size, regime_tradeable)
+        if not approval.approved:
+            self.rejections_today += 1
+        return approval
+
+    def _evaluate_trade(
+        self,
+        symbol: str,
+        direction: str,
+        confidence: float,
+        proposed_size: float,
+        regime_tradeable: bool
+    ) -> TradeApproval:
+        mode = self.get_mode()
+        if mode == KillSwitchState.KILLED:
             return TradeApproval(
                 approved=False,
                 reason=RejectionReason.KILL_SWITCH_ACTIVE,
                 message="Trading is disabled by kill switch"
             )
-        
-        # Check forced flat mode
-        if self.is_forced_flat:
+
+        if mode == KillSwitchState.FORCED_FLAT:
             return TradeApproval(
                 approved=False,
                 reason=RejectionReason.FORCED_FLAT,
                 message="System is in forced flat mode"
             )
-        
+
         # Check no-trade zones
         if self._in_no_trade_zone():
             return TradeApproval(
@@ -257,13 +375,20 @@ class CapitalController:
                 message="Current regime does not allow trading"
             )
         
-        # Check drawdown
+        # Check drawdown (automatic protection: governed by KILLSWITCH_AUTO)
         if self.equity_state.drawdown_pct >= self.config.max_drawdown:
-            self._trigger_kill("Max drawdown exceeded")
-            return TradeApproval(
-                approved=False,
-                reason=RejectionReason.MAX_DRAWDOWN_EXCEEDED,
-                message=f"Drawdown {self.equity_state.drawdown_pct:.1%} exceeds limit"
+            if self._auto_kill(
+                KillReason.MAX_DRAWDOWN,
+                f"Drawdown {self.equity_state.drawdown_pct:.1%} >= {self.config.max_drawdown:.1%}"
+            ):
+                return TradeApproval(
+                    approved=False,
+                    reason=RejectionReason.MAX_DRAWDOWN_EXCEEDED,
+                    message=f"Drawdown {self.equity_state.drawdown_pct:.1%} exceeds limit"
+                )
+            logger.warning(
+                f"KILLSWITCH_AUTO log_only: WOULD HAVE REJECTED {symbol} for max drawdown "
+                f"{self.equity_state.drawdown_pct:.1%}"
             )
         
         # Check drawdown throttle
@@ -341,76 +466,172 @@ class CapitalController:
         """Update equity state and check for drawdown triggers."""
         self.equity_state.equity = new_equity
         self.equity_state.last_update = datetime.utcnow()
-        
+
         # Update peak
         if new_equity > self.equity_state.peak_equity:
             self.equity_state.peak_equity = new_equity
-        
+
         # Calculate drawdown
         self.equity_state.drawdown = self.equity_state.peak_equity - new_equity
-        self.equity_state.drawdown_pct = self.equity_state.drawdown / self.equity_state.peak_equity
-        
+        self.equity_state.drawdown_pct = (
+            self.equity_state.drawdown / self.equity_state.peak_equity
+            if self.equity_state.peak_equity > 0 else 0.0
+        )
+
+        self._record_equity(new_equity)
+
         # Check for automatic kill
         if self.equity_state.drawdown_pct >= self.config.max_drawdown:
-            self._trigger_kill("Automatic kill: drawdown limit exceeded")
-            
-        self._record_equity(new_equity)
-    
+            self._auto_kill(KillReason.MAX_DRAWDOWN, "Automatic kill: drawdown limit exceeded")
+
+    def apply_trade_pnl(self, pnl: float) -> float:
+        """
+        Add realized PnL to the equity stored in Firestore atomically (so two
+        instances resolving trades don't overwrite each other), then refresh
+        drawdown. Returns the new equity.
+        """
+        def _tx(transaction):
+            snap = self.doc_ref.get(transaction=transaction)
+            data = snap.to_dict() if snap.exists else {}
+            equity = data.get("equity", self.equity_state.equity) + pnl
+            transaction.set(self.doc_ref, {"equity": equity}, merge=True)
+            return equity
+
+        try:
+            stored_peak = (self.doc_ref.get().to_dict() or {}).get("peak_equity")
+            if stored_peak:
+                self.equity_state.peak_equity = max(self.equity_state.peak_equity, stored_peak)
+            new_equity = run_transaction(self.db, _tx)
+        except Exception as e:
+            logger.error(f"Atomic equity update failed, applying in memory: {e}")
+            new_equity = self.equity_state.equity + pnl
+        self.update_equity(new_equity)
+        return new_equity
+
     def add_position(self, position: Position) -> None:
         """Register a new position."""
+        self._roll_day()
         self.positions[position.symbol] = position
         self.trades_today += 1
         logger.info(f"Position opened: {position.symbol} {position.direction} @ {position.entry_price}")
-    
+
+    @staticmethod
+    def _pnl(direction: str, entry_price: float, exit_price: float, size: float) -> float:
+        if direction == 'long':
+            return (exit_price - entry_price) * size
+        return (entry_price - exit_price) * size
+
     def close_position(self, symbol: str, exit_price: float) -> Optional[float]:
         """Close a position and return realized PnL."""
         if symbol not in self.positions:
             return None
-        
+
         position = self.positions.pop(symbol)
-        
-        if position.direction == 'long':
-            pnl = (exit_price - position.entry_price) * position.size
-        else:
-            pnl = (position.entry_price - exit_price) * position.size
-        
+        pnl = self._pnl(position.direction, position.entry_price, exit_price, position.size)
         logger.info(f"Position closed: {symbol} PnL: {pnl:.2f}")
         return pnl
-    
+
+    def record_closed_trade(
+        self,
+        symbol: str,
+        direction: str,
+        entry_price: float,
+        exit_price: float,
+        size: float,
+        entry_time: datetime
+    ) -> Optional[float]:
+        """
+        Record a trade that has already completed (the forward engine's
+        resolved paper trades: there is no live execution in this system).
+
+        Goes through add_position/close_position under a unique key so the
+        same PnL math and counters apply, but the position never stays open,
+        so it cannot trip the concurrency/correlation/exposure checks and
+        silence later signals. Then updates equity and runs the automatic
+        kill checks (governed by KILLSWITCH_AUTO).
+        """
+        if direction not in ("long", "short") or not size or size <= 0:
+            return None
+        key = f"{symbol}#closed#{entry_time.isoformat()}"
+        self.add_position(Position(
+            symbol=key, direction=direction, entry_price=entry_price,
+            size=size, entry_time=entry_time
+        ))
+        pnl = self.close_position(key, exit_price)
+        new_equity = self.apply_trade_pnl(pnl)
+        self.check_and_activate(current_equity=new_equity, last_trade_pnl=pnl)
+        return pnl
+
     def close_all_positions(self) -> None:
         """Emergency close all positions."""
         for symbol in list(self.positions.keys()):
             # In real implementation, would execute market orders
             self.close_position(symbol, self._get_price(symbol))
         logger.warning("All positions closed")
-    
-    def _trigger_kill(self, reason: str) -> None:
-        """Activate kill switch."""
-        self.is_killed = True
-        self.killswitch.manual_activate(reason, self.equity_state.equity)
-        self.close_all_positions()
-        self._save_state()
-        logger.critical(f"KILL SWITCH ACTIVATED: {reason}")
-    
+
+    # ── kill switch control ────────────────────────────────────────────
+
+    def check_and_activate(
+        self,
+        current_equity: float,
+        last_trade_pnl: Optional[float] = None,
+        model_performance_ratio: Optional[float] = None,
+        api_error: bool = False,
+        data_error: bool = False
+    ) -> bool:
+        """Evaluate automatic kill conditions. Returns True if a kill was applied."""
+        trigger = self.killswitch.evaluate(
+            current_equity=current_equity,
+            last_trade_pnl=last_trade_pnl,
+            model_performance_ratio=model_performance_ratio,
+            api_error=api_error,
+            data_error=data_error
+        )
+        if trigger is None:
+            return False
+        return self._auto_kill(*trigger)
+
+    def _auto_kill(self, reason: KillReason, details: str) -> bool:
+        """
+        Automatic activation. Applied only when KILLSWITCH_AUTO=enforce;
+        in log_only (default) it logs what it would have done.
+        Returns True if trading is now killed by this call (or already was).
+        """
+        if self.get_mode() == KillSwitchState.KILLED:
+            return True
+        if killswitch_auto_mode() != "enforce":
+            logger.warning(f"KILLSWITCH_AUTO log_only: WOULD HAVE KILLED ({reason.value}): {details}")
+            return False
+        self._trigger_kill(details, kill_reason=reason, actor="auto")
+        return True
+
+    def _trigger_kill(self, reason: str, kill_reason: KillReason = KillReason.MANUAL, actor: str = "manual") -> None:
+        """Activate kill switch (manual activation is always enforced)."""
+        before = self.get_mode()
+        self.apply_mode_event(KillSwitchEvent.KILL, actor=actor, reason=reason)
+        if before != KillSwitchState.KILLED:
+            self.killswitch.record_activation(kill_reason, reason, self.equity_state.equity)
+
     def reset_kill_switch(self, admin_key: str, expected_key: str) -> bool:
         """Reset kill switch (requires admin key verification)."""
         if not admin_key or admin_key != expected_key:
             logger.warning("Kill switch reset failed: invalid or missing admin key")
             return False
-        
-        self.is_killed = False
-        self.killswitch.reset(admin_key, expected_key)
-        self._save_state()
+
+        self.apply_mode_event(KillSwitchEvent.RESET, actor="admin", reason="Kill switch reset by admin")
         logger.info("Kill switch reset by admin")
         return True
-    
+
     def set_forced_flat(self, enabled: bool) -> None:
-        """Set forced flat mode."""
-        self.is_forced_flat = enabled
-        if enabled:
-            self.close_all_positions()
-            logger.warning("Forced flat mode activated")
-    
+        """
+        Set forced flat mode (persisted). Raises IllegalKillSwitchTransition
+        while KILLED: the kill must be reset first.
+        """
+        self.apply_mode_event(
+            KillSwitchEvent.FLAT_ON if enabled else KillSwitchEvent.FLAT_OFF,
+            actor="operator", reason="forced flat on" if enabled else "forced flat off"
+        )
+
     def add_no_trade_zone(self, start: datetime, end: datetime) -> None:
         """Add a no-trade time window."""
         self.no_trade_zones.append((start, end))
@@ -475,9 +696,12 @@ class CapitalController:
     
     def get_status(self) -> Dict:
         """Get current capital controller status."""
+        self._roll_day()
+        mode = self.get_mode()
         return {
-            "is_killed": self.is_killed,
-            "is_forced_flat": self.is_forced_flat,
+            "trading_mode": mode.value,
+            "is_killed": mode == KillSwitchState.KILLED,
+            "is_forced_flat": mode == KillSwitchState.FORCED_FLAT,
             "equity": self.equity_state.equity,
             "drawdown_pct": self.equity_state.drawdown_pct,
             "positions_count": len(self.positions),
@@ -486,3 +710,14 @@ class CapitalController:
             "trades_today": self.trades_today,
             "rejections_today": self.rejections_today
         }
+
+
+_capital_controller: Optional[CapitalController] = None
+
+
+def get_capital_controller() -> CapitalController:
+    """Process-wide controller shared by the signals and admin APIs."""
+    global _capital_controller
+    if _capital_controller is None:
+        _capital_controller = CapitalController()
+    return _capital_controller

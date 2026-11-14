@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from app.core.data_pipeline import DataPipeline, DataPipelineError
 from app.core.feature_engine import FeatureEngine
 from app.core.regime_detector import RegimeDetector
-from app.capital.controller import CapitalController
+from app.capital.controller import CapitalController, get_capital_controller
 from app.strategy.signal_generator import SignalGenerator, SignalType, TradingSignal
 from app.strategy.trade_levels import TradeLevelCalculator
 from app.strategy.position_sizer import PositionSizer
@@ -109,7 +109,7 @@ def get_sys_components() -> SystemComponents:
     global _components
     if _components is None:
         logger.info("Initializing system components...")
-        capital_controller = CapitalController()
+        capital_controller = get_capital_controller()
         _components = SystemComponents(
             data_pipeline=DataPipeline(),
             feature_engine=FeatureEngine(),
@@ -352,7 +352,8 @@ async def get_signal(
             direction=signal.signal_type.value,
             confidence=signal.confidence,
             entry_price=current_price,
-            model_version=signal.model_version
+            model_version=signal.model_version,
+            position_size=signal.position_size
         )
 
         response_data = signal.to_dict()

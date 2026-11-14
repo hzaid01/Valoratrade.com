@@ -24,8 +24,8 @@ from cryptography.fernet import Fernet
 def test_killswitch_gate_integration():
     """PRIORITY 3: Verify killswitch activation causes can_trade() to return False."""
     controller = CapitalController()
-    controller.is_killed = False
-    controller.killswitch.is_active = False
+    assert controller.is_killed is False
+    assert controller.killswitch.is_active is False
 
     # Check initially tradeable (mocking price fetch)
     with patch.object(controller, '_get_price', return_value=50000.0):

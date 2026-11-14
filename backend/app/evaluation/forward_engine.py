@@ -106,7 +106,8 @@ class ForwardEngine:
         confidence: float,
         entry_price: float,
         model_version: str,
-        model_id: str = ""
+        model_id: str = "",
+        position_size: Optional[float] = None
     ) -> PredictionRecord:
         """
         Log a new prediction (LOCKED at this moment).
@@ -127,6 +128,7 @@ class ForwardEngine:
             "model_id": model_id or model_version,
             "is_resolved": False,
             "outcome": None,
+            "position_size": position_size,
             "created_at": timestamp 
         }
         
