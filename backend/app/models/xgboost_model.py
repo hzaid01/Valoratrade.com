@@ -346,6 +346,10 @@ class XGBoostDecisionModel:
         Load model from local disk.
         If not found locally, download from Google Cloud Storage.
         """
+        # Registry entries written on Windows use backslashes
+        # ("runs\\X\\xgboost_models.joblib"). On Linux that is one odd
+        # filename in the cwd; normalise so it maps to runs/X/... like GCS.
+        path = path.replace("\\", "/")
         if not os.path.exists(path):
             logger.info(f"Model not found locally at {path}, downloading from GCS...")
             _download_from_gcs(gcs_path=path, local_path=path)

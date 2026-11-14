@@ -14,7 +14,7 @@ import os
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from app.api import signals_router, market_router, backtest_router, admin_router, training_router
 from app.routes import user  # Keep existing user routes
 from app.config import get_settings, validate_startup_config, ConfigurationError
+from app.core.admin_auth import admin_key_dependency
 
 # Configure logging
 logging.basicConfig(
@@ -276,7 +277,7 @@ async def debug_status():
 
 
 @app.post("/admin/reset-registry")
-async def reset_registry():
+async def reset_registry(_auth: None = Depends(admin_key_dependency)):
     """
     Clear stale model registry from Firestore.
     Use this when registry points to non-existent model files.
