@@ -198,6 +198,10 @@ class CapitalController:
         })
         self._save_state()
     
+    def is_kill_active(self) -> bool:
+        """True if trading is halted by the kill switch."""
+        return bool(self.is_killed or self.killswitch.is_active)
+
     def can_trade(
         self,
         symbol: str,

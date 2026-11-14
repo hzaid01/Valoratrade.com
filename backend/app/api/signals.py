@@ -5,6 +5,7 @@ Endpoints for trading signal generation and history.
 Returns explicit SYSTEM_NOT_READY when no champion model exists.
 """
 import logging
+import os
 from fastapi import APIRouter, HTTPException, Header, Depends
 from typing import Optional
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from app.config import Timeframes
 from app.models.xgboost_model import XGBoostDecisionModel, ModelPrediction
 from app.firebase_config import verify_firebase_token
 from app.core.regime_detector import MarketRegime
+from app.core.system_state import get_state_manager
 
 
 logger = logging.getLogger(__name__)
@@ -135,6 +137,55 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Optio
         return None
 
 
+SIGNAL_STATE_GATE_MODES = ("log_only", "enforce")
+
+
+def signal_state_gate_mode() -> str:
+    """
+    SIGNAL_STATE_GATE=log_only|enforce (default log_only).
+
+    Unknown values fall back to log_only (never silence signals because of a
+    typo in config) and are logged.
+    """
+    raw = os.getenv("SIGNAL_STATE_GATE", "log_only").strip().lower()
+    if raw not in SIGNAL_STATE_GATE_MODES:
+        logger.warning(f"Unknown SIGNAL_STATE_GATE={raw!r}; using log_only")
+        return "log_only"
+    return raw
+
+
+def check_signal_state_gate(symbol: str) -> Optional[str]:
+    """
+    Evaluate can_run_service(symbol, "signal_generation").
+
+    Returns None if signals may be served, or a human-readable block reason
+    if the gate is in ENFORCE mode and would block. In log_only mode it only
+    logs what it would have blocked and always returns None.
+    State-read errors: log_only -> allowed; enforce -> blocked (fail closed).
+    """
+    mode = signal_state_gate_mode()
+    try:
+        manager = get_state_manager()
+        allowed = manager.can_run_service(symbol, "signal_generation")
+        state_value = manager.get_state(symbol).state.value if not allowed else None
+    except Exception as e:
+        logger.error(f"SIGNAL_STATE_GATE [{symbol}] state read failed: {e}")
+        if mode == "enforce":
+            return f"System state unavailable: {e}"
+        return None
+
+    if allowed:
+        return None
+    if mode == "enforce":
+        logger.warning(f"SIGNAL_STATE_GATE enforce: blocked {symbol} in state {state_value}")
+        return f"Signal generation not permitted in system state '{state_value}'"
+    logger.warning(
+        f"SIGNAL_STATE_GATE log_only: WOULD HAVE BLOCKED {symbol} in state "
+        f"{state_value} (set SIGNAL_STATE_GATE=enforce to block)"
+    )
+    return None
+
+
 def _system_not_ready_response(symbol: str, reason: str) -> dict:
     """Return a structured SYSTEM_NOT_READY response."""
     return {
@@ -246,14 +297,29 @@ async def get_signal(
             response["data"].update(tech_indicators)
             return response
 
-        # Step 5: Generate signal
-        signal = sys.signal_generator.generate(
-            symbol=symbol,
-            prediction=prediction,
-            regime_state=regime_state,
-            current_price=current_price,
-            model_version=champion.version if champion else "default"
-        )
+        # Step 4b: System-state gate (log_only by default, see SIGNAL_STATE_GATE)
+        gate_block = check_signal_state_gate(symbol)
+        if gate_block:
+            response = _system_not_ready_response(symbol, gate_block)
+            response["data"].update(tech_indicators)
+            return response
+
+        # Step 5: Generate signal. The kill switch is a HARD block, checked
+        # here regardless of which generator filter would fire first.
+        if sys.capital_controller.is_kill_active():
+            logger.warning(f"SIGNAL [{symbol}] BLOCKED by kill switch")
+            signal = sys.signal_generator._no_trade_signal(
+                symbol, prediction, regime_state, current_price,
+                champion.version, {"kill_switch": False}, "kill_switch_active"
+            )
+        else:
+            signal = sys.signal_generator.generate(
+                symbol=symbol,
+                prediction=prediction,
+                regime_state=regime_state,
+                current_price=current_price,
+                model_version=champion.version if champion else "default"
+            )
 
         # Step 6: Calculate trade levels if signal
         if signal.signal_type.value != "no_trade":
