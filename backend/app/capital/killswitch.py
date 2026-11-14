@@ -1,15 +1,105 @@
 """
 Kill Switch Module
 
-Dedicated kill switch logic for emergency trading halt.
+Trading-mode state machine plus the automatic trigger evaluator.
+
+Single source of truth: ``KillSwitchState`` stored in Firestore
+``system_state/capital_controller.trading_mode``. Nothing else (no
+is_killed / is_active / is_forced_flat flags) decides whether trading is
+halted. ``CapitalController`` owns reads/writes of that field; this module
+defines the states, events and transition table, and evaluates automatic
+kill conditions without mutating state itself.
+
+States and transitions (anything not listed raises IllegalKillSwitchTransition):
+
+    | from         | event    | to                                   |
+    |--------------|----------|--------------------------------------|
+    | ACTIVE       | KILL     | KILLED                               |
+    | ACTIVE       | FLAT_ON  | FORCED_FLAT                          |
+    | ACTIVE       | FLAT_OFF | ACTIVE   (idempotent no-op)          |
+    | ACTIVE       | RESET    | ACTIVE   (idempotent no-op)          |
+    | FORCED_FLAT  | KILL     | KILLED   (resume_mode=FORCED_FLAT)   |
+    | FORCED_FLAT  | FLAT_ON  | FORCED_FLAT (idempotent no-op)       |
+    | FORCED_FLAT  | FLAT_OFF | ACTIVE                               |
+    | FORCED_FLAT  | RESET    | FORCED_FLAT (idempotent no-op)       |
+    | KILLED       | KILL     | KILLED   (idempotent no-op)          |
+    | KILLED       | RESET    | resume_mode (ACTIVE or FORCED_FLAT)  |
+    | KILLED       | FLAT_ON  | illegal                              |
+    | KILLED       | FLAT_OFF | illegal                              |
 """
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+class KillSwitchState(Enum):
+    """The single trading-mode state."""
+    ACTIVE = "active"            # normal trading (drawdown throttling is a sizing rule, not a mode)
+    FORCED_FLAT = "forced_flat"  # no new trades, positions closed
+    KILLED = "killed"            # no trading at all; admin reset required
+
+
+class KillSwitchEvent(Enum):
+    KILL = "kill"
+    RESET = "reset"
+    FLAT_ON = "flat_on"
+    FLAT_OFF = "flat_off"
+
+
+class IllegalKillSwitchTransition(Exception):
+    """Raised for a (state, event) pair not in the transition table."""
+
+
+# "RESUME" is resolved at apply time from the stored resume_mode.
+_RESUME = "resume"
+
+KILLSWITCH_TRANSITIONS: Dict[Tuple[KillSwitchState, KillSwitchEvent], object] = {
+    (KillSwitchState.ACTIVE, KillSwitchEvent.KILL): KillSwitchState.KILLED,
+    (KillSwitchState.ACTIVE, KillSwitchEvent.FLAT_ON): KillSwitchState.FORCED_FLAT,
+    (KillSwitchState.ACTIVE, KillSwitchEvent.FLAT_OFF): KillSwitchState.ACTIVE,
+    (KillSwitchState.ACTIVE, KillSwitchEvent.RESET): KillSwitchState.ACTIVE,
+    (KillSwitchState.FORCED_FLAT, KillSwitchEvent.KILL): KillSwitchState.KILLED,
+    (KillSwitchState.FORCED_FLAT, KillSwitchEvent.FLAT_ON): KillSwitchState.FORCED_FLAT,
+    (KillSwitchState.FORCED_FLAT, KillSwitchEvent.FLAT_OFF): KillSwitchState.ACTIVE,
+    (KillSwitchState.FORCED_FLAT, KillSwitchEvent.RESET): KillSwitchState.FORCED_FLAT,
+    (KillSwitchState.KILLED, KillSwitchEvent.KILL): KillSwitchState.KILLED,
+    (KillSwitchState.KILLED, KillSwitchEvent.RESET): _RESUME,
+}
+
+
+def next_trading_mode(
+    state: KillSwitchState,
+    event: KillSwitchEvent,
+    resume_mode: Optional[KillSwitchState] = None
+) -> KillSwitchState:
+    """Pure transition function. Raises IllegalKillSwitchTransition."""
+    target = KILLSWITCH_TRANSITIONS.get((state, event))
+    if target is None:
+        raise IllegalKillSwitchTransition(f"{event.value} not allowed in state {state.value}")
+    if target == _RESUME:
+        return resume_mode if resume_mode in (KillSwitchState.ACTIVE, KillSwitchState.FORCED_FLAT) \
+            else KillSwitchState.ACTIVE
+    return target
+
+
+def killswitch_auto_mode() -> str:
+    """
+    KILLSWITCH_AUTO=log_only|enforce (default log_only).
+
+    Governs AUTOMATIC activation only (drawdown, consecutive losses, daily
+    loss, API/data errors, model degradation). Manual admin activation is
+    always enforced. Unknown values fall back to log_only.
+    """
+    raw = os.getenv("KILLSWITCH_AUTO", "log_only").strip().lower()
+    if raw not in ("log_only", "enforce"):
+        logger.warning(f"Unknown KILLSWITCH_AUTO={raw!r}; using log_only")
+        return "log_only"
+    return raw
 
 
 class KillReason(Enum):
@@ -36,155 +126,90 @@ class KillEvent:
 
 class KillSwitch:
     """
-    Dedicated kill switch controller.
-    
-    Provides multiple trigger conditions and maintains
-    activation history for analysis.
+    Automatic kill-condition evaluator and activation history.
+
+    Holds counters (consecutive losses, daily starting equity) but NOT the
+    trading mode. ``is_active`` is a read-only view of the owner's mode.
     """
-    
+
     def __init__(
         self,
         max_consecutive_losses: int = 5,
         daily_loss_limit_pct: float = 0.05,  # 5% daily loss
-        model_degradation_threshold: float = 0.30  # 30% worse than expected
+        model_degradation_threshold: float = 0.30,  # 30% worse than expected
+        mode_provider: Optional[Callable[[], KillSwitchState]] = None
     ):
         self.max_consecutive_losses = max_consecutive_losses
         self.daily_loss_limit_pct = daily_loss_limit_pct
         self.model_degradation_threshold = model_degradation_threshold
-        
-        self.is_active = False
+        self._mode_provider = mode_provider
+
         self.activation_history: List[KillEvent] = []
         self.consecutive_losses = 0
         self.daily_pnl = 0.0
         self.starting_equity_today = 0.0
-    
-    def check_and_activate(
+
+    @property
+    def is_active(self) -> bool:
+        if self._mode_provider is None:
+            return False
+        return self._mode_provider() == KillSwitchState.KILLED
+
+    def evaluate(
         self,
         current_equity: float,
         last_trade_pnl: Optional[float] = None,
         model_performance_ratio: Optional[float] = None,
         api_error: bool = False,
         data_error: bool = False
-    ) -> bool:
+    ) -> Optional[Tuple[KillReason, str]]:
         """
-        Check all kill conditions and activate if needed.
-        
-        Returns True if kill switch was activated.
+        Update counters and return (reason, details) if a kill condition is
+        met, else None. Does not change any state.
         """
-        if self.is_active:
-            return False  # Already active
-        
-        # Check API error
-        if api_error:
-            self._activate(
-                KillReason.API_ERROR,
-                "Critical API error detected",
-                current_equity,
-                0
-            )
-            return True
-        
-        # Check data error
-        if data_error:
-            self._activate(
-                KillReason.DATA_ISSUE,
-                "Data integrity issue detected",
-                current_equity,
-                0
-            )
-            return True
-        
-        # Check consecutive losses
         if last_trade_pnl is not None:
+            self.daily_pnl += last_trade_pnl
             if last_trade_pnl < 0:
                 self.consecutive_losses += 1
             else:
                 self.consecutive_losses = 0
-            
-            if self.consecutive_losses >= self.max_consecutive_losses:
-                self._activate(
-                    KillReason.CONSECUTIVE_LOSSES,
-                    f"{self.consecutive_losses} consecutive losing trades",
-                    current_equity,
-                    0
-                )
-                return True
-        
-        # Check daily loss limit
+
+        if api_error:
+            return KillReason.API_ERROR, "Critical API error detected"
+        if data_error:
+            return KillReason.DATA_ISSUE, "Data integrity issue detected"
+        if self.consecutive_losses >= self.max_consecutive_losses:
+            return KillReason.CONSECUTIVE_LOSSES, f"{self.consecutive_losses} consecutive losing trades"
         if self.starting_equity_today > 0:
             daily_return = (current_equity - self.starting_equity_today) / self.starting_equity_today
             if daily_return < -self.daily_loss_limit_pct:
-                self._activate(
-                    KillReason.DAILY_LOSS_LIMIT,
-                    f"Daily loss {daily_return:.2%} exceeds limit",
-                    current_equity,
-                    0
-                )
-                return True
-        
-        # Check model degradation
+                return KillReason.DAILY_LOSS_LIMIT, f"Daily loss {daily_return:.2%} exceeds limit"
         if model_performance_ratio is not None:
             if model_performance_ratio < (1 - self.model_degradation_threshold):
-                self._activate(
+                return (
                     KillReason.MODEL_DEGRADATION,
-                    f"Model performing at {model_performance_ratio:.0%} of expected",
-                    current_equity,
-                    0
+                    f"Model performing at {model_performance_ratio:.0%} of expected"
                 )
-                return True
-        
-        return False
-    
-    def manual_activate(self, reason: str, current_equity: float) -> None:
-        """Manually activate the kill switch."""
-        self._activate(
-            KillReason.MANUAL,
-            reason,
-            current_equity,
-            0
-        )
-    
-    def _activate(
-        self,
-        reason: KillReason,
-        details: str,
-        equity: float,
-        positions_closed: int
-    ) -> None:
-        """Internal activation method."""
-        self.is_active = True
-        
-        event = KillEvent(
+        return None
+
+    def record_activation(self, reason: KillReason, details: str, equity: float, positions_closed: int = 0) -> None:
+        self.activation_history.append(KillEvent(
             timestamp=datetime.utcnow(),
             reason=reason,
             details=details,
             equity_at_kill=equity,
             positions_closed=positions_closed
-        )
-        self.activation_history.append(event)
-        
+        ))
         logger.critical(f"KILL SWITCH ACTIVATED: {reason.value} - {details}")
-    
-    def reset(self, admin_key: str, expected_key: str) -> bool:
-        """
-        Reset the kill switch.
-        
-        Requires admin key verification for safety.
-        """
-        if admin_key != expected_key:
-            logger.warning("Invalid admin key for kill switch reset")
-            return False
-        
-        self.is_active = False
+
+    def on_reset(self) -> None:
         self.consecutive_losses = 0
-        logger.info("Kill switch reset by admin")
-        return True
-    
+
     def start_new_day(self, current_equity: float) -> None:
         """Reset daily tracking."""
         self.starting_equity_today = current_equity
         self.daily_pnl = 0.0
-    
+
     def get_status(self) -> dict:
         """Get current kill switch status."""
         return {
@@ -197,7 +222,7 @@ class KillSwitch:
                 if self.activation_history else None
             )
         }
-    
+
     def get_history(self) -> List[dict]:
         """Get activation history."""
         return [

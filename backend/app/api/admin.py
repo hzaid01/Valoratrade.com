@@ -11,7 +11,7 @@ from typing import Optional
 from app.models.registry.model_registry import ModelRegistry
 from app.models.registry.champion_challenger import ChampionChallenger
 from app.evaluation.baselines import BaselineStrategies
-from app.capital.controller import CapitalController
+from app.capital.controller import CapitalController, get_capital_controller
 from app.capital.killswitch import KillSwitch
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ def get_admin_components() -> AdminComponents:
     if _components is None:
         model_reg = ModelRegistry()
         base_strat = BaselineStrategies()
-        cap_controller = CapitalController()
+        cap_controller = get_capital_controller()
         _components = AdminComponents(
             model_registry=model_reg,
             baseline_strategies=base_strat,

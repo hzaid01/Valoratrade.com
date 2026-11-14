@@ -38,6 +38,9 @@ def _reset_singletons():
     for mod_name, attr in [
         ("app.core.system_state", "_state_manager"),
         ("app.core.job_lock", "_lock_manager"),
+        ("app.capital.controller", "_capital_controller"),
+        ("app.api.signals", "_components"),
+        ("app.api.admin", "_components"),
     ]:
         try:
             mod = importlib.import_module(mod_name)
