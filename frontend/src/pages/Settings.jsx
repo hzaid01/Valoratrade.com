@@ -26,23 +26,24 @@ export default function Settings() {
 
 
   useEffect(() => {
+    // Ignore responses for a previous user / after unmount. Previously a
+    // slow response could overwrite the current user's key status, and a
+    // fixed 500ms sleep was used to "wait" for auth.
+    let cancelled = false;
+
     const loadSettings = async () => {
+      // ProtectedRoute only renders this page once auth has resolved; if the
+      // user is missing anyway, this effect re-runs when it arrives.
+      if (!user && !auth.currentUser) {
+        setAuthError(true);
+        setError('Not authenticated. Please log in to access settings.');
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
       try {
-        // Wait for user to be available
-        if (!user) {
-          console.warn('No user available when loading settings, waiting...');
-          await new Promise(resolve => setTimeout(resolve, 500));
-
-          // Check if user is authenticated
-          if (!auth.currentUser) {
-            setAuthError(true);
-            setError('Not authenticated. Please log in to access settings.');
-            setLoading(false);
-            return;
-          }
-        }
-
         const response = await getUserSettings();
+        if (cancelled) return;
         if (response.success) {
           // Store key status and masked values
           setKeyStatus({
@@ -60,6 +61,7 @@ export default function Settings() {
           setError('');
         }
       } catch (err) {
+        if (cancelled) return;
         const errorMsg = err.message || 'Failed to load settings';
         // Check if it's an authentication error
         if (errorMsg.includes('401') || errorMsg.includes('Unauthorized') ||
@@ -70,12 +72,20 @@ export default function Settings() {
           setError(errorMsg);
         }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadSettings();
+    return () => { cancelled = true; };
   }, [user]);
+
+  // Clear the "saved" banner timer on unmount (setState after unmount).
+  useEffect(() => {
+    if (!success) return undefined;
+    const timer = setTimeout(() => setSuccess(false), 3000);
+    return () => clearTimeout(timer);
+  }, [success]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -114,7 +124,6 @@ export default function Settings() {
         openai_api_key: '',
       });
 
-      setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
       setError(err.message || 'Failed to update settings');
     } finally {
