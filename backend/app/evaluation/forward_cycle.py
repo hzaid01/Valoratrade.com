@@ -13,6 +13,7 @@ signals endpoint (never shown to users, no position size, no equity effect).
 """
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
 
 from app.core.system_state import SystemState
@@ -29,16 +30,50 @@ def min_forward_samples() -> int:
         return 20
 
 
-def fetch_binance_price(symbol: str) -> float:
+def fetch_binance_close_at(symbol: str, when: datetime) -> Optional[float]:
+    """
+    Close of the 1h Binance candle containing ``when`` (the prediction's
+    maturity), so a late resolver run still uses the price at maturity.
+    Returns None if that candle has not closed yet / is unavailable.
+    """
     import requests
+    hour = when.replace(minute=0, second=0, microsecond=0)
+    start_ms = int(hour.replace(tzinfo=timezone.utc).timestamp() * 1000)
     resp = requests.get(
-        f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=5
+        "https://api.binance.com/api/v3/klines",
+        params={"symbol": symbol, "interval": "1h", "startTime": start_ms, "limit": 1},
+        timeout=5,
     )
     resp.raise_for_status()
-    price = float(resp.json()["price"])
-    if price <= 0:
-        raise ValueError(f"non-positive price {price}")
-    return price
+    rows = resp.json()
+    if not rows:
+        return None
+    open_time, close_time, close = int(rows[0][0]), int(rows[0][6]), float(rows[0][4])
+    if open_time != start_ms:
+        return None
+    if close_time > int(datetime.now(timezone.utc).timestamp() * 1000):
+        return None  # candle still open
+    return close if close > 0 else None
+
+
+def apply_resolved_to_equity(controller, resolved) -> int:
+    """
+    Feed resolved, served (non-shadow) predictions with a position size
+    into the capital controller as closed paper trades. Returns count.
+    """
+    applied = 0
+    for p in resolved:
+        if p.shadow or not p.position_size or p.direction not in ("long", "short"):
+            continue
+        try:
+            controller.record_closed_trade(
+                symbol=p.symbol, direction=p.direction, entry_price=p.entry_price,
+                exit_price=p.exit_price, size=p.position_size, entry_time=p.timestamp,
+            )
+            applied += 1
+        except Exception as e:
+            logger.error(f"[forward-cycle] equity update failed for {p.id}: {e}", exc_info=True)
+    return applied
 
 
 def run_forward_cycle(
@@ -47,23 +82,25 @@ def run_forward_cycle(
     registry,
     champion_challenger,
     state_manager,
-    price_fetcher: Callable[[str], float] = fetch_binance_price,
+    price_at: Callable[[str, datetime], Optional[float]] = fetch_binance_close_at,
     on_resolved: Optional[Callable[[list], None]] = None,
     on_promoted: Optional[Callable[[str, object], None]] = None,
 ) -> Dict:
     from app.models.registry.model_registry import ModelStatus
 
-    summary: Dict = {"prices": {}, "price_errors": {}, "resolved": 0,
+    summary: Dict = {"price_errors": {}, "resolved": 0,
                      "forward_metrics_updated": [], "evaluations": []}
 
-    # 1. Resolve outcomes
-    for symbol in symbols:
+    # 1. Resolve matured predictions at their maturity price
+    def _price(symbol, when):
         try:
-            summary["prices"][symbol] = price_fetcher(symbol)
+            return price_at(symbol, when)
         except Exception as e:
             summary["price_errors"][symbol] = str(e)
             logger.error(f"[forward-cycle] price fetch failed for {symbol}: {e}")
-    resolved = forward_engine.resolve_outcomes(summary["prices"])
+            return None
+
+    resolved = forward_engine.resolve_pending(_price)
     summary["resolved"] = len(resolved)
     if on_resolved and resolved:
         try:

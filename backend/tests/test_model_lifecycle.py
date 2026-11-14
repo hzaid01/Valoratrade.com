@@ -317,8 +317,8 @@ class FakeForward:
         self.metrics = metrics_by_version
         self.resolved_calls = []
 
-    def resolve_outcomes(self, prices):
-        self.resolved_calls.append(prices)
+    def resolve_pending(self, price_at):
+        self.resolved_calls.append(price_at("BTCUSDT", datetime.utcnow()))
         return []
 
     def get_forward_metrics(self, model_version=None, days=7):
@@ -338,7 +338,7 @@ def test_forward_cycle_promotes_pending_and_syncs_state(monkeypatch):
     promoted = []
     summary = run_forward_cycle(
         [SYM], FakeForward({"first": (0.6, 10)}), reg, cc, get_state_manager(),
-        price_fetcher=lambda s: 100.0, on_promoted=lambda s, m: promoted.append(m.model_id),
+        price_at=lambda s, t: 100.0, on_promoted=lambda s, m: promoted.append(m.model_id),
     )
     assert summary["forward_metrics_updated"] == [f"{SYM}_first"]
     assert summary["evaluations"] == [{"model_id": f"{SYM}_first", "status": "promoted"}]
@@ -354,7 +354,7 @@ def test_forward_cycle_needs_min_samples(monkeypatch):
     cc = _cc(reg)
     cc.evaluate_challenger(f"{SYM}_first", _baselines(), promote=False)
     summary = run_forward_cycle([SYM], FakeForward({"first": (0.6, 3)}), reg, cc,
-                                get_state_manager(), price_fetcher=lambda s: 100.0)
+                                get_state_manager(), price_at=lambda s, t: 100.0)
     assert summary["forward_metrics_updated"] == [] and summary["evaluations"] == []
 
 
@@ -367,19 +367,19 @@ def test_forward_cycle_rejection_without_champion_sets_rejected(monkeypatch):
     cc.evaluate_challenger(f"{SYM}_first", _baselines(), promote=False)
     get_state_manager().override(SYM, S.FORWARD_TESTING, "seed", "seed")
     run_forward_cycle([SYM], FakeForward({"first": (0.1, 5)}), reg, cc,
-                      get_state_manager(), price_fetcher=lambda s: 100.0)
+                      get_state_manager(), price_at=lambda s, t: 100.0)
     assert get_state_manager().get_state(SYM).state == S.REJECTED
 
 
 def test_forward_cycle_price_failure_is_reported(monkeypatch):
     from app.evaluation.forward_cycle import run_forward_cycle
 
-    def boom(s):
+    def boom(s, t):
         raise RuntimeError("binance down")
 
     ff = FakeForward({})
-    summary = run_forward_cycle([SYM], ff, _reg(), _cc(_reg()), get_state_manager(), price_fetcher=boom)
-    assert SYM in summary["price_errors"] and ff.resolved_calls == [{}]
+    summary = run_forward_cycle([SYM], ff, _reg(), _cc(_reg()), get_state_manager(), price_at=boom)
+    assert SYM in summary["price_errors"] and ff.resolved_calls == [None]
 
 
 # ── shadow predictions ──────────────────────────────────────────────
