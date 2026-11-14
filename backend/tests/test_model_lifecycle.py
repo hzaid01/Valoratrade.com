@@ -260,7 +260,7 @@ def harness(monkeypatch, tmp_path):
     cfg = h.install(monkeypatch, tmp_path)
     cached = []
     import app.models.model_cache as cache_mod
-    monkeypatch.setattr(cache_mod, "cache_model", lambda s, m: cached.append(s))
+    monkeypatch.setattr(cache_mod, "cache_model", lambda s, m, **k: cached.append(s))
     import app.models.xgboost_model as xm
     monkeypatch.setattr(xm.XGBoostDecisionModel, "load", staticmethod(lambda p: SimpleNamespace(path=p)))
     get_state_manager().override(SYM, S.READY_FOR_TRAINING, "seed", "seed")
@@ -392,6 +392,9 @@ def test_signals_log_shadow_predictions_for_pending(monkeypatch):
     _register(reg, "chal")
     _cc(reg).evaluate_challenger(f"{SYM}_chal", _baselines())
     comps.model_registry = reg
+    import app.models.model_cache as cache_mod
+    entry = cache_mod.get_cached_entry(SYM)
+    cache_mod.cache_model(SYM, entry.model, path=f"x_champ", version="champ")
     import app.models.xgboost_model as xm
     from app.models.xgboost_model import ModelPrediction
     monkeypatch.setattr(xm.XGBoostDecisionModel, "load", staticmethod(

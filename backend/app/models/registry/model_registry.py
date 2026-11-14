@@ -167,11 +167,13 @@ class ModelRegistry:
         
         self._models: Dict[str, ModelMetadata] = {}
         self._champions: Dict[str, str] = {}  # symbol -> model_id
+        self._loaded_at: Optional[datetime] = None
         
         # Try Firestore first, then local fallback
         self._load_from_firestore()
         if not self._models:
             self._load_registry()
+        self._loaded_at = datetime.utcnow()
     
     def _get_firestore(self):
         """Get Firestore client, returns None if unavailable."""
@@ -221,6 +223,7 @@ class ModelRegistry:
 
         result, models, champions = run_transaction(db, _tx)
         self._models, self._champions = models, champions
+        self._loaded_at = datetime.utcnow()
         self._save_registry()
         return result
 
@@ -316,8 +319,36 @@ class ModelRegistry:
         """Get model metadata by ID."""
         return self._models.get(model_id)
 
+    def refresh_if_stale(self) -> None:
+        """
+        Re-read the registry from Firestore if our snapshot is older than
+        REGISTRY_REFRESH_SECONDS (default 60). Long-lived processes (the
+        signals API) previously kept their start-up snapshot forever and
+        never saw promotions made by other instances. Read errors keep the
+        current snapshot.
+        """
+        import os
+        try:
+            ttl = float(os.getenv("REGISTRY_REFRESH_SECONDS", "60"))
+        except ValueError:
+            ttl = 60.0
+        now = datetime.utcnow()
+        if self._loaded_at is not None and (now - self._loaded_at).total_seconds() < ttl:
+            return
+        db = self._get_firestore()
+        if db is None:
+            return
+        try:
+            doc = db.collection("system").document("model_registry").get()
+            if doc.exists:
+                self._models, self._champions = self._parse(doc.to_dict())
+            self._loaded_at = now
+        except Exception as e:
+            logger.error(f"Registry refresh failed, keeping snapshot: {e}")
+
     def get_champion(self, symbol: str) -> Optional[ModelMetadata]:
-        """Get current champion model for a symbol."""
+        """Get current champion model for a symbol (refreshed on a TTL)."""
+        self.refresh_if_stale()
         model_id = self._champions.get(symbol)
         if model_id:
             return self._models.get(model_id)
@@ -447,6 +478,7 @@ class ModelRegistry:
         status: Optional[str] = None
     ) -> List[ModelMetadata]:
         """List models with optional filters."""
+        self.refresh_if_stale()
         models = list(self._models.values())
 
         if symbol:

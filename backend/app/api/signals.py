@@ -137,6 +137,38 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Optio
         return None
 
 
+def _champion_model(symbol: str, champion):
+    """
+    The model to serve for ``champion`` and the version it really is.
+
+    Uses the cache only if it holds THIS champion (matched by path). If the
+    champion changed (e.g. promoted on another instance), load it and cache
+    it. If loading fails but an older model is cached, keep serving that
+    one and report ITS version, instead of failing the request (which would
+    silence signals) or mislabelling it. With nothing cached, the load
+    error propagates (503, as before).
+    """
+    from app.models.model_cache import get_cached_entry, cache_model, normalize_path
+    entry = get_cached_entry(symbol)
+    if entry is not None and entry.path == normalize_path(champion.xgboost_path):
+        return entry.model, champion.version
+    if entry is not None and entry.path is None and entry.version in (None, champion.version):
+        # legacy entry without path info: trust it only for the same version
+        return entry.model, champion.version
+    try:
+        model = XGBoostDecisionModel.load(champion.xgboost_path)
+    except Exception as e:
+        if entry is None:
+            raise
+        logger.error(
+            f"[{symbol}] Could not load champion {champion.version} ({e}); "
+            f"serving previously cached model {entry.version or 'unknown'}"
+        )
+        return entry.model, entry.version or "cached_previous"
+    cache_model(symbol, model, path=champion.xgboost_path, version=champion.version)
+    return model, champion.version
+
+
 _shadow_models: dict = {}
 
 
@@ -313,10 +345,7 @@ async def get_signal(
         if champion:
             # Load and run model — try in-memory cache first, then disk
             try:
-                from app.models.model_cache import get_cached_model
-                model = get_cached_model(symbol)
-                if model is None:
-                    model = XGBoostDecisionModel.load(champion.xgboost_path)
+                model, served_version = _champion_model(symbol, champion)
                 feature_array = features.to_numpy()[-1:].reshape(1, -1)
                 prediction = model.predict_single(feature_array)
                 logger.info(
@@ -359,7 +388,7 @@ async def get_signal(
             logger.warning(f"SIGNAL [{symbol}] BLOCKED by kill switch")
             signal = sys.signal_generator._no_trade_signal(
                 symbol, prediction, regime_state, current_price,
-                champion.version, {"kill_switch": False}, "kill_switch_active"
+                served_version, {"kill_switch": False}, "kill_switch_active"
             )
         else:
             signal = sys.signal_generator.generate(
@@ -367,7 +396,7 @@ async def get_signal(
                 prediction=prediction,
                 regime_state=regime_state,
                 current_price=current_price,
-                model_version=champion.version if champion else "default"
+                model_version=served_version
             )
 
         # Step 6: Calculate trade levels if signal

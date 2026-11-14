@@ -74,17 +74,18 @@ def first_model_gate_mode() -> str:
     return raw
 
 
-def _cache_champion_model(symbol: str, xgboost_path: str) -> None:
+def _cache_champion_model(symbol: str, xgboost_path: str, version: Optional[str] = None) -> None:
     """
     Put the newly promoted champion in the in-memory cache used by signals.
     Previously only the first model was cached, so a later promotion kept
     serving the OLD cached model under the new champion's version. On load
-    failure the old cache entry is kept (signals keep flowing) and logged.
+    failure the old cache entry is kept (signals keep flowing) and logged;
+    the signals endpoint then reports the cached model's real version.
     """
     try:
         from app.models.model_cache import cache_model
         from app.models.xgboost_model import XGBoostDecisionModel
-        cache_model(symbol, XGBoostDecisionModel.load(xgboost_path))
+        cache_model(symbol, XGBoostDecisionModel.load(xgboost_path), path=xgboost_path, version=version)
     except Exception as cache_err:
         logger.error(f"[{symbol}] Model cache refresh failed, previous model stays cached: {cache_err}")
 
@@ -394,7 +395,9 @@ async def run_training_job(symbols: List[str], force: bool = False):
                     promoted = verdict == "promoted"
 
                 if promoted:
-                    _cache_champion_model(symbol, str(training_run.get_model_paths()["xgboost"]))
+                    _cache_champion_model(
+                        symbol, str(training_run.get_model_paths()["xgboost"]), model_metadata.version
+                    )
 
                 # Update system state based on promotion
                 if promoted:
@@ -745,7 +748,7 @@ async def forward_cycle(
             champion_challenger=ChampionChallenger(registry, BaselineStrategies()),
             state_manager=get_state_manager(),
             on_resolved=lambda resolved: apply_resolved_to_equity(get_capital_controller(), resolved),
-            on_promoted=lambda sym, m: _cache_champion_model(sym, m.xgboost_path),
+            on_promoted=lambda sym, m: _cache_champion_model(sym, m.xgboost_path, m.version),
         )
         outcome = JobOutcome.SUCCESS
         return {"success": True, "data": summary}

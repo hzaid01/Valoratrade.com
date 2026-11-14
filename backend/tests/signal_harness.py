@@ -52,8 +52,9 @@ def install(monkeypatch, champion=True, prediction=None):
     monkeypatch.setattr(signals, "get_sys_components", lambda: comps)
 
     import app.models.model_cache as cache_mod
-    monkeypatch.setattr(cache_mod, "get_cached_model",
-                        lambda s: SimpleNamespace(predict_single=lambda x: pred))
+    cache_mod.clear_cache()
+    cache_mod.cache_model("BTCUSDT", SimpleNamespace(predict_single=lambda x: pred),
+                          path="x", version="v1")
     comps.logged = logged
     return comps
 
