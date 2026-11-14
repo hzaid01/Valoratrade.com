@@ -299,6 +299,15 @@ async def run_training_job(symbols: List[str], force: bool = False):
                     }
                     continue
 
+                # Score baselines on the SAME validation window as the model,
+                # so the promotion gate compares like with like.
+                val_window = (getattr(training_result, "config", None) or {}).get("val_window")
+                if val_window:
+                    try:
+                        baseline_results = baselines.run_all_window(df, *val_window)
+                    except Exception as e:
+                        logger.error(f"[{symbol}] Windowed baselines failed, using full-history: {e}")
+
                 # Finalize training run (saves metrics, baselines, forward placeholder)
                 run_result = training_run.finalize(
                     training_metrics=training_result.metrics,
