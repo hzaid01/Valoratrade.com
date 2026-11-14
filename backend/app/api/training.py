@@ -690,7 +690,8 @@ async def forward_cycle(symbols: Optional[List[str]] = None):
     Resolve matured predictions, refresh forward metrics and re-evaluate
     PENDING challengers. Intended for Cloud Scheduler (hourly).
     """
-    from app.evaluation.forward_cycle import run_forward_cycle
+    from app.evaluation.forward_cycle import run_forward_cycle, apply_resolved_to_equity
+    from app.capital.controller import get_capital_controller
     from app.evaluation.forward_engine import ForwardEngine
     from app.evaluation.baselines import BaselineStrategies
     from app.models.registry.model_registry import ModelRegistry
@@ -713,6 +714,7 @@ async def forward_cycle(symbols: Optional[List[str]] = None):
             registry=registry,
             champion_challenger=ChampionChallenger(registry, BaselineStrategies()),
             state_manager=get_state_manager(),
+            on_resolved=lambda resolved: apply_resolved_to_equity(get_capital_controller(), resolved),
             on_promoted=lambda sym, m: _cache_champion_model(sym, m.xgboost_path),
         )
         outcome = JobOutcome.SUCCESS
