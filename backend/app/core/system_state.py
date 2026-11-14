@@ -11,6 +11,7 @@ from typing import Dict, Optional, Set
 from dataclasses import dataclass, field
 
 from app.firebase_config import get_firestore
+from app.core.fs_tx import run_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -146,54 +147,63 @@ class StateSnapshot:
 class SystemStateManager:
     """
     Manages global system state per symbol.
-    
+
     Enforces:
-    - Valid state transitions
+    - Valid state transitions (read-check-write in ONE Firestore transaction,
+      so two Cloud Run instances cannot both perform the same transition)
     - Service permissions
-    - State persistence
+    - State persistence (Firestore ``system_state/{symbol}`` is the only
+      source of truth; there is no per-process cache)
     """
-    
+
     def __init__(self):
         self.db = get_firestore()
         self.collection = self.db.collection('system_state')
-        self._cache: Dict[str, StateSnapshot] = {}
-    
-    def get_state(self, symbol: str) -> StateSnapshot:
-        """Get current state for a symbol."""
-        # Check cache first
-        if symbol in self._cache:
-            cache_age = datetime.utcnow() - self._cache[symbol].updated_at
-            if cache_age < timedelta(seconds=30):
-                return self._cache[symbol]
-        
-        # Fetch from Firestore
-        doc = self.collection.document(symbol).get()
-        
-        if not doc.exists:
-            # Initialize new symbol
-            initial = StateSnapshot(
-                state=SystemState.NO_DATA,
-                symbol=symbol,
-                updated_at=datetime.utcnow(),
-                updated_by="system",
-                reason="Initial state"
-            )
-            self._save_state(initial)
-            return initial
-        
-        data = doc.to_dict()
-        snapshot = StateSnapshot(
-            state=SystemState(data["state"]),
-            symbol=data["symbol"],
-            updated_at=datetime.fromisoformat(data["updated_at"]),
-            updated_by=data["updated_by"],
-            reason=data["reason"],
-            metadata=data.get("metadata", {})
+
+    # ── reads ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _initial(symbol: str) -> StateSnapshot:
+        return StateSnapshot(
+            state=SystemState.NO_DATA,
+            symbol=symbol,
+            updated_at=datetime.utcnow(),
+            updated_by="system",
+            reason="Initial state"
         )
-        
-        self._cache[symbol] = snapshot
-        return snapshot
-    
+
+    @staticmethod
+    def _from_dict(symbol: str, data: Dict) -> StateSnapshot:
+        return StateSnapshot(
+            state=SystemState(data["state"]),
+            symbol=data.get("symbol", symbol),
+            updated_at=datetime.fromisoformat(data["updated_at"]),
+            updated_by=data.get("updated_by", "unknown"),
+            reason=data.get("reason", ""),
+            metadata=data.get("metadata", {}) or {}
+        )
+
+    def get_state(self, symbol: str) -> StateSnapshot:
+        """Get current state for a symbol (always read from Firestore)."""
+        ref = self.collection.document(symbol)
+
+        def _tx(transaction):
+            snap = ref.get(transaction=transaction)
+            if snap.exists:
+                return self._from_dict(symbol, snap.to_dict())
+            # Initialise inside the transaction so a concurrent first
+            # transition on another instance cannot be overwritten.
+            initial = self._initial(symbol)
+            transaction.set(ref, initial.to_dict())
+            return initial
+
+        doc = ref.get()
+        if doc.exists:
+            return self._from_dict(symbol, doc.to_dict())
+        return run_transaction(self.db, _tx)
+
+    # ── transitions ────────────────────────────────────────────────────
+
     def transition(
         self,
         symbol: str,
@@ -203,52 +213,62 @@ class SystemStateManager:
         metadata: Optional[Dict] = None
     ) -> bool:
         """
-        Attempt state transition.
-        
-        Returns True if transition succeeded, False if invalid.
+        Attempt state transition atomically.
+
+        Returns True if the transition was committed, False if it is not
+        allowed from the state stored in Firestore at commit time (logged at
+        ERROR). Callers must check the result.
         """
-        current = self.get_state(symbol)
-        
-        # Check if transition is valid
-        if new_state not in VALID_TRANSITIONS.get(current.state, set()):
+        ref = self.collection.document(symbol)
+
+        def _tx(transaction):
+            snap = ref.get(transaction=transaction)
+            current = (
+                self._from_dict(symbol, snap.to_dict()) if snap.exists
+                else self._initial(symbol)
+            )
+            if new_state not in VALID_TRANSITIONS.get(current.state, set()):
+                return False, current, None
+            new_snapshot = StateSnapshot(
+                state=new_state,
+                symbol=symbol,
+                updated_at=datetime.utcnow(),
+                updated_by=actor,
+                reason=reason,
+                metadata=metadata or {}
+            )
+            transaction.set(ref, new_snapshot.to_dict())
+            transaction.set(
+                self.db.collection('state_transitions').document(),
+                self._log_entry(current, new_snapshot)
+            )
+            return True, current, new_snapshot
+
+        ok, current, _ = run_transaction(self.db, _tx)
+        if not ok:
             logger.error(
                 f"Invalid transition: {current.state.value} -> {new_state.value} "
-                f"for {symbol}. Valid: {VALID_TRANSITIONS.get(current.state, set())}"
+                f"for {symbol} by {actor}. "
+                f"Valid: {sorted(s.value for s in VALID_TRANSITIONS.get(current.state, set()))}"
             )
             return False
-        
-        # Create new state
-        new_snapshot = StateSnapshot(
-            state=new_state,
-            symbol=symbol,
-            updated_at=datetime.utcnow(),
-            updated_by=actor,
-            reason=reason,
-            metadata=metadata or {}
-        )
-        
-        self._save_state(new_snapshot)
-        
-        # Log transition
-        self._log_transition(current, new_snapshot)
-        
-        logger.info(f"State transition: {symbol} {current.state.value} -> {new_state.value}")
+        logger.info(f"State transition: {symbol} {current.state.value} -> {new_state.value} by {actor}")
         return True
-    
+
     def can_run_service(self, symbol: str, service: str) -> bool:
         """Check if a service is allowed to run in current state."""
         current = self.get_state(symbol)
         allowed_states = SERVICE_PERMISSIONS.get(service, set())
-        
+
         if current.state not in allowed_states:
             logger.warning(
                 f"Service '{service}' not allowed in state {current.state.value} "
-                f"for {symbol}. Allowed states: {[s.value for s in allowed_states]}"
+                f"for {symbol}. Allowed states: {sorted(s.value for s in allowed_states)}"
             )
             return False
-        
+
         return True
-    
+
     def override(
         self,
         symbol: str,
@@ -261,21 +281,33 @@ class SystemStateManager:
         Bypass the transition table (operator/force paths only).
 
         Always logged at WARNING and written to the audit log with
-        forced=True, so overrides are never silent.
+        forced=True, in the same transaction as the state write.
         """
-        current = self.get_state(symbol)
+        ref = self.collection.document(symbol)
         meta = dict(metadata or {})
         meta["forced"] = True
-        new_snapshot = StateSnapshot(
-            state=new_state,
-            symbol=symbol,
-            updated_at=datetime.utcnow(),
-            updated_by=actor,
-            reason=f"FORCED: {reason}",
-            metadata=meta
-        )
-        self._save_state(new_snapshot)
-        self._log_transition(current, new_snapshot)
+
+        def _tx(transaction):
+            snap = ref.get(transaction=transaction)
+            current = (
+                self._from_dict(symbol, snap.to_dict()) if snap.exists
+                else self._initial(symbol)
+            )
+            new_snapshot = StateSnapshot(
+                state=new_state,
+                symbol=symbol,
+                updated_at=datetime.utcnow(),
+                updated_by=actor,
+                reason=f"FORCED: {reason}",
+                metadata=meta
+            )
+            transaction.set(ref, new_snapshot.to_dict())
+            entry = self._log_entry(current, new_snapshot)
+            entry["forced"] = True
+            transaction.set(self.db.collection('state_transitions').document(), entry)
+            return current, new_snapshot
+
+        current, new_snapshot = run_transaction(self.db, _tx)
         logger.warning(
             f"FORCED state change: {symbol} {current.state.value} -> {new_state.value} "
             f"by {actor}: {reason}"
@@ -303,14 +335,9 @@ class SystemStateManager:
         self.override(symbol, new_state, actor="admin_force", reason=reason)
         return True
 
-    def _save_state(self, snapshot: StateSnapshot) -> None:
-        """Save state to Firestore."""
-        self.collection.document(snapshot.symbol).set(snapshot.to_dict())
-        self._cache[snapshot.symbol] = snapshot
-    
-    def _log_transition(self, old: StateSnapshot, new: StateSnapshot) -> None:
-        """Log state transition for audit."""
-        log_entry = {
+    @staticmethod
+    def _log_entry(old: StateSnapshot, new: StateSnapshot) -> Dict:
+        return {
             "symbol": new.symbol,
             "from_state": old.state.value,
             "to_state": new.state.value,
@@ -318,9 +345,6 @@ class SystemStateManager:
             "reason": new.reason,
             "timestamp": new.updated_at.isoformat()
         }
-        
-        # Append to transition log
-        self.db.collection('state_transitions').add(log_entry)
 
 
 # Singleton instance

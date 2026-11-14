@@ -59,6 +59,22 @@ class IncrementalTrainingRequest(BaseModel):
     symbols: Optional[List[str]] = None
 
 
+def _checked_transition(state_manager, symbol, new_state, actor, reason, metadata=None) -> bool:
+    """
+    End-of-run state transition whose failure cannot be undone (the model is
+    already trained/registered). A False result is logged loudly with the
+    state we were in, so stuck or racing symbols are visible.
+    """
+    ok = state_manager.transition(symbol, new_state, actor, reason, metadata=metadata)
+    if not ok:
+        current = state_manager.get_state(symbol)
+        logger.error(
+            f"[{symbol}] STATE TRANSITION REJECTED: wanted {new_state.value}, "
+            f"state is {current.state.value} (actor={actor}, reason={reason})"
+        )
+    return ok
+
+
 def _job_outcome(status: Optional[str]) -> JobOutcome:
     """
     Map a per-symbol training result status to a lock outcome.
@@ -161,14 +177,20 @@ async def run_training_job(symbols: List[str], force: bool = False):
                         reason=f"Force-training requested via API from {previous.state.value}",
                         metadata={"resume_state": resume_state.value}
                     )
-                else:
-                    state_manager.transition(
-                        symbol=symbol,
-                        new_state=SystemState.TRAINING,
-                        actor="training_api",
-                        reason="Training job started",
-                        metadata={"resume_state": resume_state.value}
-                    )
+                elif not state_manager.transition(
+                    symbol=symbol,
+                    new_state=SystemState.TRAINING,
+                    actor="training_api",
+                    reason="Training job started",
+                    metadata={"resume_state": resume_state.value}
+                ):
+                    # State changed under us (another instance/job). Do not
+                    # train from an unexpected state.
+                    results[symbol] = {
+                        "status": "skipped",
+                        "reason": "state_transition_rejected"
+                    }
+                    continue
 
                 logger.info(f"{'='*50}")
                 logger.info(f"[{symbol}] TRAINING STARTED")
@@ -193,8 +215,8 @@ async def run_training_job(symbols: List[str], force: bool = False):
                     }
                     # With a champion serving, keep serving; otherwise go back
                     # to collecting data (TRAINING -> COLLECTING_DATA is valid).
-                    state_manager.transition(
-                        symbol,
+                    _checked_transition(
+                        state_manager, symbol,
                         resume_state if had_champion_at_start else SystemState.COLLECTING_DATA,
                         "training_api", "Insufficient data"
                     )
@@ -237,8 +259,8 @@ async def run_training_job(symbols: List[str], force: bool = False):
                 except Exception as e:
                     training_run.mark_failed(str(e), "model_training")
                     logger.error(f"[{symbol}] Training FAILED: {e}", exc_info=True)
-                    state_manager.transition(
-                        symbol, SystemState.TRAINING_FAILED,
+                    _checked_transition(
+                        state_manager, symbol, SystemState.TRAINING_FAILED,
                         "training_api", str(e),
                         metadata={"resume_state": resume_state.value} if resume_state else None
                     )
@@ -257,8 +279,8 @@ async def run_training_job(symbols: List[str], force: bool = False):
 
                 if run_result.status == "invalid":
                     logger.error(f"[{symbol}] Training metrics invalid: {run_result.errors}")
-                    state_manager.transition(
-                        symbol, SystemState.TRAINING_FAILED,
+                    _checked_transition(
+                        state_manager, symbol, SystemState.TRAINING_FAILED,
                         "training_api", "Invalid metrics",
                         metadata={"resume_state": resume_state.value} if resume_state else None
                     )
@@ -327,25 +349,25 @@ async def run_training_job(symbols: List[str], force: bool = False):
 
                 # Update system state based on promotion
                 if promoted:
-                    state_manager.transition(
-                        symbol, SystemState.PROMOTED,
+                    _checked_transition(
+                        state_manager, symbol, SystemState.PROMOTED,
                         "training_api", "Model promoted to champion"
                     )
                 elif registry.get_champion(symbol) is not None:
                     # Existing champion keeps serving; challenger stays in the
                     # registry for later re-evaluation.
-                    state_manager.transition(
-                        symbol, resume_state, "training_api",
+                    _checked_transition(
+                        state_manager, symbol, resume_state, "training_api",
                         f"Champion retained; challenger {promotion_result.status.value}"
                     )
                 elif promotion_result.status.value.startswith("rejected"):
-                    state_manager.transition(
-                        symbol, SystemState.REJECTED, "training_api",
+                    _checked_transition(
+                        state_manager, symbol, SystemState.REJECTED, "training_api",
                         f"Challenger rejected: {promotion_result.status.value}"
                     )
                 else:
-                    state_manager.transition(
-                        symbol, SystemState.FORWARD_TESTING, "training_api",
+                    _checked_transition(
+                        state_manager, symbol, SystemState.FORWARD_TESTING, "training_api",
                         f"Challenger pending: {promotion_result.status.value}"
                     )
 
@@ -375,8 +397,8 @@ async def run_training_job(symbols: List[str], force: bool = False):
                 logger.error(f"[{symbol}] Training FAILED: {e}", exc_info=True)
                 results[symbol] = {"status": "failed", "error": str(e)}
                 try:
-                    state_manager.transition(
-                        symbol, SystemState.TRAINING_FAILED,
+                    _checked_transition(
+                        state_manager, symbol, SystemState.TRAINING_FAILED,
                         "training_api", str(e),
                         metadata={"resume_state": resume_state.value} if resume_state else None
                     )

@@ -124,13 +124,18 @@ class ModelDemotion:
             logger.info(f"Rolled back to {rollback_target}")
         else:
             # No good rollback target - transition to degraded state
-            self.state_manager.transition(
+            if self.state_manager.transition(
                 symbol=symbol,
                 new_state=SystemState.LIVE_DEGRADED,
                 actor="demotion_system",
                 reason=f"No rollback target available. Original demotion: {reason}"
-            )
-            logger.warning(f"No rollback target for {symbol}, entering LIVE_DEGRADED state")
+            ):
+                logger.warning(f"No rollback target for {symbol}, entering LIVE_DEGRADED state")
+            else:
+                logger.error(
+                    f"[{symbol}] demotion could not enter LIVE_DEGRADED from "
+                    f"{self.state_manager.get_state(symbol).state.value}"
+                )
         
         event = DemotionEvent(
             model_id=model_id,
