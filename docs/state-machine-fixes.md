@@ -157,3 +157,49 @@ Other new knobs: `MIN_FORWARD_SAMPLES` (default 20), the resolved predictions a 
 - Frontend state machines (WebSocket reconnect, Settings page, auth store).
 - Pure refactors: `_training_status` global dict (finding #6), `TrainingRun.status` strings (#7).
 - Auth on training/admin trigger endpoints.
+
+---
+
+# Round 2: other bugs found during the audit
+
+Branch `claude/implicit-state-machines-ig36w5`, on top of `main` after PR #2. One commit per fix. **Not merged.** Backend: 358 tests passed. Frontend: 8 `node --test` tests passed, build and lint clean on changed files.
+
+| Commit | Fix |
+|---|---|
+| `2e9db73` | **Training metrics were fake.** The validation "Sharpe" was the market's buy-and-hold Sharpe (√252 on hourly data), so the gate never measured the model. Now an out-of-sample backtest of the model's own positions. Real `accuracy` and `max_drawdown` added. Features computed on the full series (val samples 12 → ~80), labels purged at the split, X/y aligned by index, baselines scored on the same window |
+| `dc5efbf` | **Capital checks used `proposed_size=1.0`.** The real size is now checked after sizing and capped by exposure. A Binance price-API outage no longer rejects every signal. Correlation is no longer skipped when exposure shrinks a trade |
+| `54938a1` | **Auth:** `/api/admin/promote`, `/api/admin/retrain` and `force=true` training always require `X-Admin-Key`. Scheduler endpoints are behind `ADMIN_AUTH` |
+| `62f486e` | **`POST /admin/reset-registry` was open to anyone.** One request wiped every champion and silenced all signals. Now always needs the admin key. Windows model paths normalised |
+| `f8a3422` | `/api/admin/retrain` returned "queued" and did nothing. It now really queues training |
+| `3b5d03d` | `jobs/retrain.py` bypassed the job lock and the state machine. It now uses the same pipeline |
+| `5d5e1f4` | **Demotion never ran**, and if it had, it would have demoted every champion (missing metric read as 0). Now runs in the forward cycle behind `DEMOTION_MODE` |
+| `1ee1cc4` | The signals process never saw promotions made on other instances, and could serve the old cached model under the new version label. Registry refreshes on a TTL. Cache is matched by model path. If the new champion can't load, the old model keeps serving with its true version |
+| `50d8f52` | A failed or skipped training run still set a 6h cooldown and `last_success` |
+| `f2ee238` | Frontend WebSocket: backoff (1s→30s), retry when the constructor throws, a "Live / reconnecting" badge on the chart, one shared implementation |
+| `c1f4fb3` | Frontend Settings: stale responses ignored, the 500ms auth sleep removed, timer cleaned up |
+
+## New flags (all default safe)
+
+| Env var | Default | What enforce does | Log line |
+|---|---|---|---|
+| `ADMIN_AUTH` | `log_only` | `/api/training/trigger`, `/run-sync`, `/ingest-data`, `/forward-cycle` return 403 without `X-Admin-Key` | `ADMIN_AUTH log_only: WOULD HAVE REJECTED` |
+| `DEMOTION_MODE` | `log_only` | A champion whose forward accuracy drops >20% below its validation accuracy is retired and rolled back (or the symbol goes `LIVE_DEGRADED`) | `DEMOTION_MODE log_only: WOULD HAVE DEMOTED` |
+| `REGISTRY_REFRESH_SECONDS` | `60` | How often a process re-reads the model registry | n/a |
+
+**Order to switch on `ADMIN_AUTH`:**
+1. Add `X-Admin-Key: <ADMIN_SECRET_KEY>` to every Cloud Scheduler job. `CLOUD_SCHEDULER_SETUP.md` is updated, including the forward-cycle job.
+2. Confirm the "WOULD HAVE REJECTED" lines stop.
+3. Set `ADMIN_AUTH=enforce`.
+
+## Expect after deploying round 2
+- **Promotion results change.** Challengers are now judged on the model's real out-of-sample performance against baselines on the same window. Expect more rejections. That's the gate finally working.
+- Old registry entries keep their old (meaningless) validation metrics. Only newly trained models have real ones, so the first comparison against an old champion is uneven. Retraining every symbol once resets the field.
+- `jobs/retrain.py` now trains from the Firestore candle store (like the API) instead of 2000 fresh Binance candles.
+
+## Still open
+- **Committed env files** (`backend/.env.deploy`, `backend/env-vars.yaml`, `backend/deploy_env.yaml`, `frontend/.env.production`). I was not allowed to read their contents, so check them yourself and rotate any real secret.
+- `POST /api/backtest/run` is unauthenticated (read-only, but compute-heavy).
+- Demotion only uses forward accuracy. Forward drawdown and loss streaks aren't measured yet.
+- Starting paper equity is hardcoded at 100000.
+- `_training_status` and the model cache are still per-instance memory.
+- No React component tests exist. The Settings change was verified by lint and build only.
