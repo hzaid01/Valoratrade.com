@@ -137,6 +137,52 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Optio
         return None
 
 
+_shadow_models: dict = {}
+
+
+def _log_shadow_predictions(sys, symbol, features, current_price) -> int:
+    """
+    Run PENDING challengers for this symbol on the same features and log
+    their predictions as shadow=True, so they accumulate forward metrics for
+    re-evaluation. Never affects the served signal; every error is swallowed
+    and logged. Returns the number of shadow predictions logged.
+    """
+    logged = 0
+    try:
+        from app.models.registry.model_registry import ModelStatus
+        challengers = sys.model_registry.list_models(symbol=symbol, status=ModelStatus.PENDING)
+    except Exception as e:
+        logger.error(f"[{symbol}] shadow: listing challengers failed: {e}")
+        return 0
+    if not challengers:
+        return 0
+    try:
+        feature_array = features.to_numpy()[-1:].reshape(1, -1)
+    except Exception as e:
+        logger.error(f"[{symbol}] shadow: feature extraction failed: {e}")
+        return 0
+    for c in challengers:
+        try:
+            model = _shadow_models.get(c.xgboost_path)
+            if model is None:
+                model = XGBoostDecisionModel.load(c.xgboost_path)
+                _shadow_models[c.xgboost_path] = model
+            pred = model.predict_single(feature_array)
+            direction = (
+                "long" if pred.prob_up > pred.prob_down
+                else "short" if pred.prob_down > pred.prob_up else "no_trade"
+            )
+            sys.forward_engine.log_prediction(
+                symbol=symbol, direction=direction, confidence=pred.confidence,
+                entry_price=current_price, model_version=c.version,
+                model_id=c.model_id, shadow=True
+            )
+            logged += 1
+        except Exception as e:
+            logger.warning(f"[{symbol}] shadow prediction for {c.model_id} failed: {e}")
+    return logged
+
+
 SIGNAL_STATE_GATE_MODES = ("log_only", "enforce")
 
 
@@ -260,6 +306,9 @@ async def get_signal(
 
         # Step 4: Get champion model
         champion = sys.model_registry.get_champion(symbol)
+
+        # Step 4a: Shadow-run pending challengers (forward test data only)
+        _log_shadow_predictions(sys, symbol, features, current_price)
 
         if champion:
             # Load and run model — try in-memory cache first, then disk

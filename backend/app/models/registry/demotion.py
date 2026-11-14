@@ -112,15 +112,18 @@ class ModelDemotion:
         """Execute demotion and rollback."""
         logger.warning(f"Demoting model {model_id}: {reason}")
         
-        # Find rollback target
-        rollback_target = self._find_rollback_target(symbol)
+        # Find rollback target (former good champion only)
+        rollback_target = self._find_rollback_target(symbol, exclude=model_id)
         
-        # Retire current champion
-        self.registry.retire(model_id)
+        # Retire current champion as DEMOTED so it is never a rollback target
+        self.registry.retire(model_id, reason="demoted")
         
-        # Promote rollback target or go to baseline-only mode
-        if rollback_target:
-            self.registry.promote_to_champion(rollback_target)
+        # Promote rollback target or go to degraded mode. Re-promoting a
+        # retired model is an override by design: audited, actor=demotion.
+        if rollback_target and self.registry.promote_to_champion(
+            rollback_target, override=True, actor="demotion_rollback",
+            reason=f"rollback after demoting {model_id}: {reason}"
+        ):
             logger.info(f"Rolled back to {rollback_target}")
         else:
             # No good rollback target - transition to degraded state
@@ -151,23 +154,13 @@ class ModelDemotion:
         
         return event
     
-    def _find_rollback_target(self, symbol: str) -> Optional[str]:
-        """Find best model to rollback to."""
-        models = self.registry.list_models(symbol=symbol)
-        
-        # Filter to non-champion, non-retired models
-        candidates = [
-            m for m in models
-            if m.status == "registered"
-            and m.validation_metrics.get("sharpe_ratio", 0) > 0
-        ]
-        
-        if not candidates:
-            return None
-        
-        # Pick best by sharpe ratio
-        best = max(candidates, key=lambda m: m.validation_metrics.get("sharpe_ratio", 0))
-        return best.model_id
+    def _find_rollback_target(self, symbol: str, exclude: Optional[str] = None) -> Optional[str]:
+        """
+        Best model to roll back to: only former champions retired because
+        they were superseded. Previously this picked status=="registered"
+        models, i.e. challengers that had FAILED promotion.
+        """
+        return self.registry.find_rollback_target(symbol, exclude=exclude)
     
     def _log_demotion(self, event: DemotionEvent) -> None:
         """Log demotion to Firestore for audit."""
