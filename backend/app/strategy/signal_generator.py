@@ -216,7 +216,7 @@ class SignalGenerator:
             symbol=symbol,
             direction=raw_direction.value,
             confidence=raw_confidence,
-            proposed_size=1.0,  # Placeholder, real size calculated later
+            proposed_size=None,  # size unknown here; sized check runs after sizing
             regime_tradeable=regime_state.regime.is_tradeable
         )
 

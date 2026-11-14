@@ -312,8 +312,9 @@ class CapitalController:
         symbol: str,
         direction: str,
         confidence: float,
-        proposed_size: float,
-        regime_tradeable: bool = True
+        proposed_size: Optional[float],
+        regime_tradeable: bool = True,
+        price: Optional[float] = None
     ) -> TradeApproval:
         """
         Check if a trade is allowed.
@@ -324,14 +325,19 @@ class CapitalController:
             symbol: Trading pair
             direction: 'long' or 'short'
             confidence: Model confidence 0-1
-            proposed_size: Proposed position size in base currency
+            proposed_size: Proposed position size in base currency, or None
+                when the size is not known yet (size-dependent checks, i.e.
+                drawdown size throttle and exposure, are skipped; call again
+                with the real size)
             regime_tradeable: Whether current regime allows trading
+            price: Current price for the exposure check; fetched from the
+                exchange only if not given
 
         Returns:
             TradeApproval with decision and adjusted size
         """
         self._roll_day()
-        approval = self._evaluate_trade(symbol, direction, confidence, proposed_size, regime_tradeable)
+        approval = self._evaluate_trade(symbol, direction, confidence, proposed_size, regime_tradeable, price)
         if not approval.approved:
             self.rejections_today += 1
         return approval
@@ -341,8 +347,9 @@ class CapitalController:
         symbol: str,
         direction: str,
         confidence: float,
-        proposed_size: float,
-        regime_tradeable: bool
+        proposed_size: Optional[float],
+        regime_tradeable: bool,
+        price: Optional[float] = None
     ) -> TradeApproval:
         mode = self.get_mode()
         if mode == KillSwitchState.KILLED:
@@ -393,7 +400,7 @@ class CapitalController:
         
         # Check drawdown throttle
         throttle_threshold = self.config.max_drawdown * self.config.drawdown_throttle_threshold
-        if self.equity_state.drawdown_pct >= throttle_threshold:
+        if proposed_size is not None and self.equity_state.drawdown_pct >= throttle_threshold:
             # Reduce size but allow trade
             size_multiplier = 1 - (self.equity_state.drawdown_pct / self.config.max_drawdown)
             proposed_size *= max(0.25, size_multiplier)
@@ -415,16 +422,33 @@ class CapitalController:
                 message=f"Max concurrent trades ({self.config.max_concurrent_trades}) reached"
             )
         
-        # Fetch price securely (no silent fallbacks)
-        try:
-            current_price = self._get_price(symbol)
-        except Exception as e:
-            logger.error(f"Trade rejected: price fetch failed for {symbol}: {e}")
+        # Check correlation (before sizing: it does not depend on size)
+        if not self._check_correlation(symbol):
             return TradeApproval(
                 approved=False,
-                reason=RejectionReason.SYSTEM_STATE,
-                message=f"Price unavailable for {symbol}: unable to evaluate risk exposure"
+                reason=RejectionReason.CORRELATION_LIMIT,
+                message="Position would exceed correlation limit with existing positions"
             )
+
+        if proposed_size is None:
+            return TradeApproval(
+                approved=True,
+                adjusted_size=0.0,
+                message="Approved before sizing; size-dependent checks pending"
+            )
+
+        # Price: caller-supplied (e.g. the candle close) or fetched securely
+        current_price = price if (price is not None and price > 0) else None
+        if current_price is None:
+            try:
+                current_price = self._get_price(symbol)
+            except Exception as e:
+                logger.error(f"Trade rejected: price fetch failed for {symbol}: {e}")
+                return TradeApproval(
+                    approved=False,
+                    reason=RejectionReason.SYSTEM_STATE,
+                    message=f"Price unavailable for {symbol}: unable to evaluate risk exposure"
+                )
 
         # Check total exposure
         current_exposure = self._total_exposure()
@@ -445,14 +469,6 @@ class CapitalController:
                 approved=False,
                 reason=RejectionReason.MAX_EXPOSURE,
                 message="Maximum portfolio exposure reached"
-            )
-        
-        # Check correlation
-        if not self._check_correlation(symbol):
-            return TradeApproval(
-                approved=False,
-                reason=RejectionReason.CORRELATION_LIMIT,
-                message="Position would exceed correlation limit with existing positions"
             )
         
         # All checks passed
