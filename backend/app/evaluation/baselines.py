@@ -79,6 +79,32 @@ class BaselineStrategies:
         
         return results
     
+    def run_all_window(self, df: pd.DataFrame, start: int, end: int) -> Dict[str, BaselineResult]:
+        """
+        Run every baseline on df[:end] (so indicators are warmed up) and
+        score Sharpe / max drawdown / total return on positions [start, end)
+        only: the same window the model's validation backtest covers.
+        Other metrics keep their full-history values.
+        """
+        results = {}
+        history = df.iloc[:end]
+        for strategy in BaselineStrategy:
+            result = self.run_strategy(history, strategy)
+            window = result.equity_curve.iloc[start:end] if result.equity_curve is not None else None
+            if window is not None and len(window) >= 2:
+                metrics = dict(result.metrics)
+                metrics['sharpe_ratio'] = self.metrics_calculator.sharpe_ratio(window)
+                metrics['max_drawdown'] = self.metrics_calculator.max_drawdown(window)
+                metrics['total_return'] = float(window.iloc[-1] / window.iloc[0] - 1)
+                metrics['scored_window'] = [int(start), int(end)]
+                result.metrics = metrics
+            results[strategy.value] = result
+            logger.info(
+                f"Baseline {strategy.value} (window {start}:{end}): "
+                f"Sharpe={result.metrics.get('sharpe_ratio', 0):.2f}"
+            )
+        return results
+
     def run_strategy(
         self,
         df: pd.DataFrame,
