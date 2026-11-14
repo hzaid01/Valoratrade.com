@@ -393,7 +393,27 @@ async def get_signal(
                 regime=regime_state.regime,
                 current_drawdown_pct=sys.capital_controller.equity_state.drawdown_pct
             )
-            signal.position_size = pos_size.size
+            # Final capital check with the REAL size (the generator's check
+            # ran before sizing). Exposure uses the candle close, so an
+            # exchange price-API outage cannot reject the signal here.
+            sized = sys.capital_controller.can_trade(
+                symbol=symbol,
+                direction=signal.signal_type.value,
+                confidence=signal.confidence,
+                proposed_size=pos_size.size,
+                regime_tradeable=regime_state.regime.is_tradeable,
+                price=current_price
+            )
+            if sized.approved:
+                signal.position_size = sized.adjusted_size
+            else:
+                logger.info(f"SIGNAL [{symbol}] FILTERED by sized capital check: {sized.reason.value}")
+                filters = dict(signal.filters_passed or {})
+                filters["capital_sized"] = False
+                signal = sys.signal_generator._no_trade_signal(
+                    symbol, prediction, regime_state, current_price,
+                    signal.model_version, filters, f"capital_{sized.reason.value}"
+                )
 
         # Step 7: Log prediction for forward engine
         sys.forward_engine.log_prediction(
