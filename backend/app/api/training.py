@@ -464,10 +464,15 @@ async def run_training_job(symbols: List[str], force: bool = False):
 
         _training_status["last_result"] = results
         _training_status["run_count"] += 1
-        _training_status["last_success"] = datetime.utcnow().isoformat()
-        _training_status["cooldown_until"] = (
-            datetime.utcnow() + timedelta(hours=TRAINING_COOLDOWN_HOURS)
-        ).isoformat()
+        # Only a run that actually trained something counts as a success and
+        # starts the cooldown. Previously an all-failed or all-skipped run
+        # stamped last_success and blocked retries for 6 hours. Failures are
+        # still bounded by the job-lock retry limit.
+        if any(r.get("status") == "completed" for r in results.values()):
+            _training_status["last_success"] = datetime.utcnow().isoformat()
+            _training_status["cooldown_until"] = (
+                datetime.utcnow() + timedelta(hours=TRAINING_COOLDOWN_HOURS)
+            ).isoformat()
 
         return results
 
