@@ -23,9 +23,10 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
 
-from app.core.system_state import get_state_manager, SystemState
+from app.core.system_state import get_state_manager, SystemState, resume_state_after_training
 from app.core.job_lock import get_lock_manager, JobOutcome, LockDenial
 from app.core.data_store import DataStore, InsufficientDataError
+from app.core.system_state import VALID_TRANSITIONS
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/training", tags=["training"])
@@ -119,6 +120,7 @@ async def run_training_job(symbols: List[str], force: bool = False):
 
         for symbol in symbols:
             lock = None
+            resume_state = None
             try:
                 # Acquire job lock
                 # force=True may bypass an exhausted retry count, never a live lock.
@@ -133,40 +135,40 @@ async def run_training_job(symbols: List[str], force: bool = False):
                     continue
 
                 # Check system state (bypass if force=True)
+                previous = state_manager.get_state(symbol)
                 if not force and not state_manager.can_run_service(symbol, "training"):
-                    current_state = state_manager.get_state(symbol)
                     logger.warning(
                         f"[{symbol}] Training skipped: invalid state "
-                        f"{current_state.state.value}"
+                        f"{previous.state.value}"
                     )
                     results[symbol] = {
                         "status": "skipped",
-                        "reason": f"invalid_state:{current_state.state.value}"
+                        "reason": f"invalid_state:{previous.state.value}"
                     }
                     continue
 
-                # Transition to TRAINING state
-                # When force=True, we may need to force the transition
-                current_state = state_manager.get_state(symbol)
-                if force and current_state.state != SystemState.READY_FOR_TRAINING:
-                    # Force to READY_FOR_TRAINING first, then to TRAINING
-                    logger.info(
-                        f"[{symbol}] Force-transitioning from "
-                        f"{current_state.state.value} → READY_FOR_TRAINING → TRAINING"
-                    )
-                    state_manager.force_state(
-                        symbol=symbol,
-                        new_state=SystemState.READY_FOR_TRAINING,
-                        admin_key="ADMIN_FORCE_KEY",
-                        reason="Force-training requested via API"
-                    )
+                # Where to return if a champion exists and is not replaced.
+                resume_state = resume_state_after_training(previous)
+                had_champion_at_start = registry.get_champion(symbol) is not None
 
-                state_manager.transition(
-                    symbol=symbol,
-                    new_state=SystemState.TRAINING,
-                    actor="training_api",
-                    reason="Training job started"
-                )
+                if SystemState.TRAINING not in VALID_TRANSITIONS.get(previous.state, set()):
+                    # Only reachable with force=True (permissions guarantee
+                    # TRAINING is valid otherwise). Explicit, audited override
+                    # instead of the old hardcoded ADMIN_FORCE_KEY.
+                    state_manager.override(
+                        symbol, SystemState.TRAINING,
+                        actor="training_api_force",
+                        reason=f"Force-training requested via API from {previous.state.value}",
+                        metadata={"resume_state": resume_state.value}
+                    )
+                else:
+                    state_manager.transition(
+                        symbol=symbol,
+                        new_state=SystemState.TRAINING,
+                        actor="training_api",
+                        reason="Training job started",
+                        metadata={"resume_state": resume_state.value}
+                    )
 
                 logger.info(f"{'='*50}")
                 logger.info(f"[{symbol}] TRAINING STARTED")
@@ -189,8 +191,11 @@ async def run_training_job(symbols: List[str], force: bool = False):
                         "reason": "insufficient_data",
                         "error": str(e)
                     }
+                    # With a champion serving, keep serving; otherwise go back
+                    # to collecting data (TRAINING -> COLLECTING_DATA is valid).
                     state_manager.transition(
-                        symbol, SystemState.COLLECTING_DATA,
+                        symbol,
+                        resume_state if had_champion_at_start else SystemState.COLLECTING_DATA,
                         "training_api", "Insufficient data"
                     )
                     continue
@@ -234,7 +239,8 @@ async def run_training_job(symbols: List[str], force: bool = False):
                     logger.error(f"[{symbol}] Training FAILED: {e}", exc_info=True)
                     state_manager.transition(
                         symbol, SystemState.TRAINING_FAILED,
-                        "training_api", str(e)
+                        "training_api", str(e),
+                        metadata={"resume_state": resume_state.value} if resume_state else None
                     )
                     results[symbol] = {
                         "status": "failed", "error": str(e),
@@ -253,7 +259,8 @@ async def run_training_job(symbols: List[str], force: bool = False):
                     logger.error(f"[{symbol}] Training metrics invalid: {run_result.errors}")
                     state_manager.transition(
                         symbol, SystemState.TRAINING_FAILED,
-                        "training_api", "Invalid metrics"
+                        "training_api", "Invalid metrics",
+                        metadata={"resume_state": resume_state.value} if resume_state else None
                     )
                     results[symbol] = {"status": "invalid", "errors": run_result.errors}
                     continue
@@ -324,11 +331,22 @@ async def run_training_job(symbols: List[str], force: bool = False):
                         symbol, SystemState.PROMOTED,
                         "training_api", "Model promoted to champion"
                     )
+                elif registry.get_champion(symbol) is not None:
+                    # Existing champion keeps serving; challenger stays in the
+                    # registry for later re-evaluation.
+                    state_manager.transition(
+                        symbol, resume_state, "training_api",
+                        f"Champion retained; challenger {promotion_result.status.value}"
+                    )
+                elif promotion_result.status.value.startswith("rejected"):
+                    state_manager.transition(
+                        symbol, SystemState.REJECTED, "training_api",
+                        f"Challenger rejected: {promotion_result.status.value}"
+                    )
                 else:
                     state_manager.transition(
-                        symbol, SystemState.CHALLENGER_READY,
-                        "training_api",
-                        f"Challenger ready: {promotion_result.status.value}"
+                        symbol, SystemState.FORWARD_TESTING, "training_api",
+                        f"Challenger pending: {promotion_result.status.value}"
                     )
 
                 training_duration = (datetime.utcnow() - training_start).total_seconds()
@@ -359,7 +377,8 @@ async def run_training_job(symbols: List[str], force: bool = False):
                 try:
                     state_manager.transition(
                         symbol, SystemState.TRAINING_FAILED,
-                        "training_api", str(e)
+                        "training_api", str(e),
+                        metadata={"resume_state": resume_state.value} if resume_state else None
                     )
                 except Exception:
                     pass  # State transition may also fail
