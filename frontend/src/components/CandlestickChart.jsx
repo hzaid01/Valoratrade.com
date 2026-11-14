@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createChart, CrosshairMode, ColorType, CandlestickSeries, HistogramSeries } from 'lightweight-charts';
 import { getKlines, getSignalHistory } from '../lib/api';
-import { subscribeToKlines, subscribeToAggTrades } from '../lib/binanceWebSocket';
+import { subscribeToKlines, subscribeToAggTrades, WS_STATUS } from '../lib/binanceWebSocket';
 
 /**
  * Multi-timeframe candlestick chart
@@ -21,6 +21,7 @@ export default function CandlestickChart({ symbol, supportResistance }) {
     const [interval, setInterval] = useState('1h');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [feedStatus, setFeedStatus] = useState(WS_STATUS.CONNECTING);
 
     const intervals = [
         { value: '15m', label: '15M', description: 'Visualization' },
@@ -123,7 +124,7 @@ export default function CandlestickChart({ symbol, supportResistance }) {
                 value: kline.volume,
                 color: kline.close >= kline.open ? 'rgba(0, 206, 201, 0.3)' : 'rgba(255, 107, 107, 0.3)'
             });
-        });
+        }, setFeedStatus);
 
         // Subscribe to aggTrade stream for millisecond-level updates on the last candle
         aggTradeCleanupRef.current = subscribeToAggTrades(symbol, (trade) => {
@@ -304,7 +305,22 @@ export default function CandlestickChart({ symbol, supportResistance }) {
         <div className="glass-effect rounded-2xl p-4 mb-6">
             {/* Timeframe Selector */}
             <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-white">Price Chart</h3>
+                <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-semibold text-white">Price Chart</h3>
+                    <span
+                        className={`text-xs px-2 py-0.5 rounded-full ${feedStatus === WS_STATUS.OPEN
+                            ? 'bg-primary-500/15 text-primary-400'
+                            : 'bg-yellow-500/15 text-yellow-400'
+                            }`}
+                        title="Binance live price feed"
+                    >
+                        {feedStatus === WS_STATUS.OPEN
+                            ? 'Live'
+                            : feedStatus === WS_STATUS.RECONNECTING
+                                ? 'Live feed reconnecting…'
+                                : 'Connecting…'}
+                    </span>
+                </div>
                 <div className="flex space-x-2">
                     {intervals.map((tf) => (
                         <button
